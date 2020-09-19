@@ -1,155 +1,132 @@
 <template>
-  <ul class="topic-list">
-    <template v-for="(topic, index) in topics">
-      <li v-if="showAd && (index === 3)" :key="'ad-' + index ">
-        <div class="ad">
-          <ins
-            class="adsbygoogle"
-            style="display:block"
-            data-ad-format="fluid"
-            data-ad-layout-key="-ig-s+1x-t-q"
-            data-ad-client="ca-pub-5683711753850351"
-            data-ad-slot="4728140043"
-          />
-          <script>
-            (adsbygoogle = window.adsbygoogle || []).push({});
-          </script>
-        </div>
-      </li>
-      <li :key="topic.topicId">
-        <div class="topic-item">
-          <div class="left">
-            <div class="avatar avatar-size-45 is-rounded" :style="{backgroundImage:'url('+ topic.user.avatar +')'}" />
-          </div>
-          <div class="center">
-            <a :href="'/topic/' + topic.topicId" :title="topic.title">
-              <div class="topic-title">{{ topic.title }}</div>
+  <ul class="topic-list topic-wrap">
+    <li
+      v-for="(topic, index) in topics"
+      :key="topic.topicId"
+      class="topic-item"
+    >
+      <!-- 信息流广告 -->
+      <adsbygoogle
+        v-if="showAd && (index === 3 || index === 10 || index === 18)"
+        ad-slot="4980294904"
+        ad-format="fluid"
+        ad-layout-key="-ht-19-1m-3j+mu"
+      />
+      <article itemscope itemtype="http://schema.org/BlogPosting">
+        <div class="topic-header">
+          <div v-if="showAvatar" class="topic-header-left">
+            <a :href="'/user/' + topic.user.id" :title="topic.user.nickname">
+              <img :src="topic.user.smallAvatar" class="avatar" />
             </a>
+          </div>
+          <div class="topic-header-center">
+            <h1 class="topic-title" itemprop="headline">
+              <a :href="'/topic/' + topic.topicId" :title="topic.title">{{
+                topic.title
+              }}</a>
+            </h1>
 
             <div class="topic-meta">
-              <span><a :href="'/user/' + topic.user.id">{{ topic.user.nickname }}</a></span>
-              <span>{{ topic.lastCommentTime | prettyDate }}</span>
-              <span v-for="tag in topic.tags" :key="tag.tagId" class="tag">
-                <a :href="'/topics/tag/' + tag.tagId + '/1'">{{ tag.tagName }}</a></span>
+              <span
+                class="meta-item"
+                itemprop="author"
+                itemscope
+                itemtype="http://schema.org/Person"
+              >
+                <a :href="'/user/' + topic.user.id" itemprop="name">{{
+                  topic.user.nickname
+                }}</a>
+              </span>
+              <span class="meta-item">
+                <time
+                  :datetime="
+                    topic.lastCommentTime | formatDate('yyyy-MM-ddTHH:mm:ss')
+                  "
+                  itemprop="datePublished"
+                  >{{ topic.lastCommentTime | prettyDate }}</time
+                >
+              </span>
+              <span class="meta-item">
+                <a
+                  v-if="topic.node"
+                  :href="'/topics/node/' + topic.node.nodeId"
+                  class="node"
+                  >{{ topic.node.name }}</a
+                >
+              </span>
+              <span class="meta-item">
+                <span v-for="tag in topic.tags" :key="tag.tagId" class="tag">
+                  <a :href="'/topics/tag/' + tag.tagId">{{ tag.tagName }}</a>
+                </span>
+              </span>
             </div>
           </div>
-          <div class="right">
-            <span class="view-count">{{ topic.viewCount }}</span>
+          <div class="topic-header-right">
+            <div class="like">
+              <span
+                :class="{ liked: topic.liked }"
+                class="like-btn"
+                @click="like(topic)"
+              >
+                <i class="iconfont icon-like" />
+              </span>
+              <span v-if="topic.likeCount" class="like-count">{{
+                topic.likeCount
+              }}</span>
+            </div>
+            <span class="count"
+              >{{ topic.commentCount }}&nbsp;/&nbsp;{{ topic.viewCount }}</span
+            >
           </div>
         </div>
-      </li>
-    </template>
+      </article>
+    </li>
   </ul>
 </template>
 
 <script>
+import utils from '~/common/utils'
 export default {
   props: {
     topics: {
       type: Array,
-      default: function () {
-        return null
+      default() {
+        return []
       },
-      required: true
+      required: false,
+    },
+    showAvatar: {
+      type: Boolean,
+      default: true,
     },
     showAd: {
       type: Boolean,
-      default: false
-    }
-  }
+      default: false,
+    },
+  },
+  methods: {
+    async like(topic) {
+      try {
+        await this.$axios.post('/api/topic/like/' + topic.topicId)
+        topic.liked = true
+        topic.likeCount++
+      } catch (e) {
+        if (e.errorCode === 1) {
+          this.$toast.info('请登录后点赞！！！', {
+            action: {
+              text: '去登录',
+              onClick: (e, toastObject) => {
+                utils.toSignin()
+              },
+            },
+          })
+        } else {
+          this.$toast.error(e.message || e)
+        }
+      }
+    },
+  },
 }
 </script>
 
-<style lang="scss" scoped>
-.topic-list {
-  margin: 0 0 10px 0 !important;
-
-  li {
-    padding: 8px 0 8px 8px;
-    position: relative;
-    overflow: hidden;
-    border-radius: 4px;
-    transition: background .2s;
-
-    &:hover {
-      background: #f3f6f9;
-    }
-
-    // &:not(:last-child) {
-    //   border-bottom: 1px dashed #f2f2f2;
-    // }
-
-    .topic-item {
-      display: flex;
-
-      .left {
-        min-width: 45px;
-        min-height: 45px;
-      }
-
-      .center {
-        width: 100%;
-        margin-left: 5px;
-
-        .topic-title {
-          color: #555;
-          font-size: 16px;
-          line-height: 21px;
-          font-weight: normal;
-          overflow: hidden;
-          word-break: break-all;
-          -webkit-line-clamp: 2;
-          text-overflow: ellipsis;
-          -webkit-box-orient: vertical;
-          display: -webkit-box;
-        }
-
-        .topic-meta {
-          position: relative;
-          font-size: 12px;
-          color: #bbb;
-          margin-top: 6px;
-
-          span {
-            font-size: 12px;
-
-            &:not(:last-child) {
-              margin-right: 3px;
-            }
-
-            &.tag {
-              height: auto !important;
-            }
-
-            &.btn a {
-              color: #3273dc;
-            }
-          }
-
-          a {
-            color: #778087;
-          }
-        }
-      }
-
-      .right {
-        min-width: 65px;
-        max-width: 65px;
-        text-align: right;
-        padding-right: 8px;
-
-        span.view-count {
-          font-size: 12px;
-          color: #fff;
-
-          background: #aab0c6;
-          padding: 2px 10px;
-          border-radius: 6px;
-          font-weight: 700;
-        }
-      }
-
-    }
-  }
-}
-</style>
+<style lang="scss" scoped></style>

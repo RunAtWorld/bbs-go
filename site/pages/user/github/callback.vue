@@ -14,21 +14,16 @@
 import utils from '~/common/utils'
 export default {
   layout: 'no-footer',
-  data() {
-    return {
-      loading: false
-    }
-  },
-  head() {
-    return {
-      title: this.$siteTitle('登录处理中...')
-    }
-  },
   asyncData({ params, query }) {
     return {
       code: query.code,
       state: query.state,
-      ref: query.ref
+      ref: query.ref,
+    }
+  },
+  data() {
+    return {
+      loading: false,
     }
   },
   mounted() {
@@ -37,43 +32,35 @@ export default {
   methods: {
     async callback() {
       this.loading = true
-      const me = this
       try {
         const user = await this.$store.dispatch('user/signinByGithub', {
           code: this.code,
-          state: this.state
+          state: this.state,
         })
 
-        if (this.ref) { // 跳到登录前
+        if (this.ref) {
+          // 跳到登录前
           utils.linkTo(this.ref)
-        } else { // 跳到个人主页
+        } else {
+          // 跳到个人主页
           utils.linkTo('/user/' + user.id)
         }
       } catch (e) {
-        if (e.errorCode === 10 || e.errorCode === 11) {
-          this.$toast.info('请绑定账号：' + e.message, {
-            duration: 1000,
-            onComplete: function () {
-              if (me.ref) {
-                utils.linkTo('/user/github/bind?githubId=' + e.data.id + '&ref=' + encodeURIComponent(me.ref))
-              } else {
-                utils.linkTo('/user/github/bind?githubId=' + e.data.id)
-              }
-            }
-          })
-        } else {
-          console.error(e)
-          this.$toast.error('登录失败：' + (e.message || e), {
-            onComplete: function () {
-              utils.linkTo('/user/signin')
-            }
-          })
-        }
+        this.$toast.error('登录失败：' + (e.message || e), {
+          onComplete() {
+            utils.linkTo('/user/signin')
+          },
+        })
       } finally {
         this.loading = false
       }
+    },
+  },
+  head() {
+    return {
+      title: this.$siteTitle('登录处理中...'),
     }
-  }
+  },
 }
 </script>
 
@@ -91,56 +78,6 @@ export default {
 
   .loading-text {
     margin-left: 10px;
-  }
-
-  .loading-animation {
-    width: 20px;
-    height: 20px;
-    display: inline-block;
-    color: red;
-    vertical-align: middle;
-    pointer-events: none;
-    position: relative;
-  }
-  .loading-animation:before,
-  .loading-animation:after {
-    content: "";
-    width: inherit;
-    height: inherit;
-    border-radius: 50%;
-    background-color: currentcolor;
-    opacity: 0.6;
-    position: absolute;
-    top: 0;
-    left: 0;
-    -webkit-animation: loading-animation 2s infinite ease-in-out;
-    animation: loading-animation 2s infinite ease-in-out;
-  }
-  .loading-animation:after {
-    -webkit-animation-delay: -1s;
-    animation-delay: -1s;
-  }
-  @-webkit-keyframes loading-animation {
-    0%,
-    100% {
-      -webkit-transform: scale(0);
-      transform: scale(0);
-    }
-    50% {
-      -webkit-transform: scale(1);
-      transform: scale(1);
-    }
-  }
-  @keyframes loading-animation {
-    0%,
-    100% {
-      -webkit-transform: scale(0);
-      transform: scale(0);
-    }
-    50% {
-      -webkit-transform: scale(1);
-      transform: scale(1);
-    }
   }
 }
 </style>

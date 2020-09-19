@@ -1,25 +1,28 @@
 package api
 
 import (
+	"bbs-go/common/validate"
+	"bbs-go/model/constants"
 	"strconv"
 	"strings"
+	"time"
 
-	"github.com/kataras/iris/context"
+	"github.com/kataras/iris/v12"
 	"github.com/mlogclub/simple"
 
-	"github.com/mlogclub/bbs-go/controllers/render"
-	"github.com/mlogclub/bbs-go/model"
-	"github.com/mlogclub/bbs-go/services"
-	"github.com/mlogclub/bbs-go/services/cache"
+	"bbs-go/cache"
+	"bbs-go/controllers/render"
+	"bbs-go/model"
+	"bbs-go/services"
 )
 
 type UserController struct {
-	Ctx context.Context
+	Ctx iris.Context
 }
 
 // 获取当前登录用户
-func (this *UserController) GetCurrent() *simple.JsonResult {
-	user := services.UserTokenService.GetCurrent(this.Ctx)
+func (c *UserController) GetCurrent() *simple.JsonResult {
+	user := services.UserTokenService.GetCurrent(c.Ctx)
 	if user != nil {
 		return simple.JsonData(render.BuildUser(user))
 	}
@@ -27,26 +30,33 @@ func (this *UserController) GetCurrent() *simple.JsonResult {
 }
 
 // 用户详情
-func (this *UserController) GetBy(userId int64) *simple.JsonResult {
+func (c *UserController) GetBy(userId int64) *simple.JsonResult {
 	user := cache.UserCache.Get(userId)
-	if user != nil {
+	if user != nil && user.Status != constants.StatusDeleted {
 		return simple.JsonData(render.BuildUser(user))
 	}
 	return simple.JsonErrorMsg("用户不存在")
 }
 
+// 用户积分
+func (c *UserController) GetScoreBy(userId int64) *simple.JsonResult {
+	score := cache.UserCache.GetScore(userId)
+	return simple.NewEmptyRspBuilder().Put("score", score).JsonResult()
+}
+
 // 修改用户资料
-func (this *UserController) PostEditBy(userId int64) *simple.JsonResult {
-	user := services.UserTokenService.GetCurrent(this.Ctx)
+func (c *UserController) PostEditBy(userId int64) *simple.JsonResult {
+	user := services.UserTokenService.GetCurrent(c.Ctx)
 	if user == nil {
 		return simple.JsonError(simple.ErrorNotLogin)
 	}
 	if user.Id != userId {
 		return simple.JsonErrorMsg("无权限")
 	}
-	nickname := strings.TrimSpace(simple.FormValue(this.Ctx, "nickname"))
-	avatar := strings.TrimSpace(simple.FormValue(this.Ctx, "avatar"))
-	description := simple.FormValue(this.Ctx, "description")
+	nickname := strings.TrimSpace(simple.FormValue(c.Ctx, "nickname"))
+	avatar := strings.TrimSpace(simple.FormValue(c.Ctx, "avatar"))
+	homePage := simple.FormValue(c.Ctx, "homePage")
+	description := simple.FormValue(c.Ctx, "description")
 
 	if len(nickname) == 0 {
 		return simple.JsonErrorMsg("昵称不能为空")
@@ -55,9 +65,14 @@ func (this *UserController) PostEditBy(userId int64) *simple.JsonResult {
 		return simple.JsonErrorMsg("头像不能为空")
 	}
 
+	if len(homePage) > 0 && validate.IsURL(homePage) != nil {
+		return simple.JsonErrorMsg("个人主页地址错误")
+	}
+
 	err := services.UserService.Updates(user.Id, map[string]interface{}{
 		"nickname":    nickname,
 		"avatar":      avatar,
+		"home_page":   homePage,
 		"description": description,
 	})
 	if err != nil {
@@ -66,26 +81,88 @@ func (this *UserController) PostEditBy(userId int64) *simple.JsonResult {
 	return simple.JsonSuccess()
 }
 
-// 未读消息数量
-func (this *UserController) GetMsgcount() *simple.JsonResult {
-	user := services.UserTokenService.GetCurrent(this.Ctx)
-	var count int64 = 0
-	if user != nil {
-		count = services.MessageService.GetUnReadCount(user.Id)
+// 修改头像
+func (c *UserController) PostUpdateAvatar() *simple.JsonResult {
+	user := services.UserTokenService.GetCurrent(c.Ctx)
+	if user == nil {
+		return simple.JsonError(simple.ErrorNotLogin)
 	}
-	return simple.NewEmptyRspBuilder().Put("count", count).JsonResult()
+	avatar := strings.TrimSpace(simple.FormValue(c.Ctx, "avatar"))
+	if len(avatar) == 0 {
+		return simple.JsonErrorMsg("头像不能为空")
+	}
+	err := services.UserService.UpdateAvatar(user.Id, avatar)
+	if err != nil {
+		return simple.JsonErrorMsg(err.Error())
+	}
+	return simple.JsonSuccess()
 }
 
-// 活跃用户
-func (this *UserController) GetActive() *simple.JsonResult {
-	users := cache.UserCache.GetActiveUsers()
-	return simple.JsonData(render.BuildUsers(users))
+// 设置用户名
+func (c *UserController) PostSetUsername() *simple.JsonResult {
+	user := services.UserTokenService.GetCurrent(c.Ctx)
+	if user == nil {
+		return simple.JsonError(simple.ErrorNotLogin)
+	}
+	username := strings.TrimSpace(simple.FormValue(c.Ctx, "username"))
+	err := services.UserService.SetUsername(user.Id, username)
+	if err != nil {
+		return simple.JsonErrorMsg(err.Error())
+	}
+	return simple.JsonSuccess()
+}
+
+// 设置邮箱
+func (c *UserController) PostSetEmail() *simple.JsonResult {
+	user := services.UserTokenService.GetCurrent(c.Ctx)
+	if user == nil {
+		return simple.JsonError(simple.ErrorNotLogin)
+	}
+	email := strings.TrimSpace(simple.FormValue(c.Ctx, "email"))
+	err := services.UserService.SetEmail(user.Id, email)
+	if err != nil {
+		return simple.JsonErrorMsg(err.Error())
+	}
+	return simple.JsonSuccess()
+}
+
+// 设置密码
+func (c *UserController) PostSetPassword() *simple.JsonResult {
+	user := services.UserTokenService.GetCurrent(c.Ctx)
+	if user == nil {
+		return simple.JsonError(simple.ErrorNotLogin)
+	}
+	password := simple.FormValue(c.Ctx, "password")
+	rePassword := simple.FormValue(c.Ctx, "rePassword")
+	err := services.UserService.SetPassword(user.Id, password, rePassword)
+	if err != nil {
+		return simple.JsonErrorMsg(err.Error())
+	}
+	return simple.JsonSuccess()
+}
+
+// 修改密码
+func (c *UserController) PostUpdatePassword() *simple.JsonResult {
+	user := services.UserTokenService.GetCurrent(c.Ctx)
+	if user == nil {
+		return simple.JsonError(simple.ErrorNotLogin)
+	}
+	var (
+		oldPassword = simple.FormValue(c.Ctx, "oldPassword")
+		password    = simple.FormValue(c.Ctx, "password")
+		rePassword  = simple.FormValue(c.Ctx, "rePassword")
+	)
+	err := services.UserService.UpdatePassword(user.Id, oldPassword, password, rePassword)
+	if err != nil {
+		return simple.JsonErrorMsg(err.Error())
+	}
+	return simple.JsonSuccess()
 }
 
 // 用户收藏
-func (this *UserController) GetFavorites() *simple.JsonResult {
-	user := services.UserTokenService.GetCurrent(this.Ctx)
-	cursor := simple.FormValueInt64Default(this.Ctx, "cursor", 0)
+func (c *UserController) GetFavorites() *simple.JsonResult {
+	user := services.UserTokenService.GetCurrent(c.Ctx)
+	cursor := simple.FormValueInt64Default(c.Ctx, "cursor", 0)
 
 	// 用户必须登录
 	if user == nil {
@@ -95,11 +172,10 @@ func (this *UserController) GetFavorites() *simple.JsonResult {
 	// 查询列表
 	var favorites []model.Favorite
 	if cursor > 0 {
-		favorites, _ = services.FavoriteService.QueryCnd(simple.NewQueryCnd("user_id = ? and id < ?",
-			user.Id, cursor).Order("id desc").Size(20))
+		favorites = services.FavoriteService.Find(simple.NewSqlCnd().Where("user_id = ? and id < ?",
+			user.Id, cursor).Desc("id").Limit(20))
 	} else {
-		favorites, _ = services.FavoriteService.QueryCnd(simple.NewQueryCnd("user_id = ?",
-			user.Id).Order("id desc").Size(20))
+		favorites = services.FavoriteService.Find(simple.NewSqlCnd().Where("user_id = ?", user.Id).Desc("id").Limit(20))
 	}
 
 	if len(favorites) > 0 {
@@ -109,32 +185,152 @@ func (this *UserController) GetFavorites() *simple.JsonResult {
 	return simple.JsonCursorData(render.BuildFavorites(favorites), strconv.FormatInt(cursor, 10))
 }
 
+// 获取最近3条未读消息
+func (c *UserController) GetMsgrecent() *simple.JsonResult {
+	user := services.UserTokenService.GetCurrent(c.Ctx)
+	var count int64 = 0
+	var messages []model.Message
+	if user != nil {
+		count = services.MessageService.GetUnReadCount(user.Id)
+		messages = services.MessageService.Find(simple.NewSqlCnd().Eq("user_id", user.Id).
+			Eq("status", constants.MsgStatusUnread).Limit(3).Desc("id"))
+	}
+	return simple.NewEmptyRspBuilder().Put("count", count).Put("messages", render.BuildMessages(messages)).JsonResult()
+}
+
 // 用户消息
-func (this *UserController) GetMessages() *simple.JsonResult {
-	user := services.UserTokenService.GetCurrent(this.Ctx)
-	cursor := simple.FormValueInt64Default(this.Ctx, "cursor", 0)
+func (c *UserController) GetMessages() *simple.JsonResult {
+	user := services.UserTokenService.GetCurrent(c.Ctx)
+	page := simple.FormValueIntDefault(c.Ctx, "page", 1)
 
 	// 用户必须登录
 	if user == nil {
 		return simple.JsonError(simple.ErrorNotLogin)
 	}
 
-	// 查询列表
-	var messages []model.Message
-	if cursor > 0 {
-		messages, _ = services.MessageService.QueryCnd(simple.NewQueryCnd("user_id = ? and id < ?",
-			user.Id, cursor).Order("id desc").Size(20))
-	} else {
-		messages, _ = services.MessageService.QueryCnd(simple.NewQueryCnd("user_id = ?",
-			user.Id).Order("id desc").Size(20))
-	}
-
-	if len(messages) > 0 {
-		cursor = messages[len(messages)-1].Id
-	}
+	messages, paging := services.MessageService.FindPageByCnd(simple.NewSqlCnd().
+		Eq("user_id", user.Id).
+		Page(page, 20).Desc("id"))
 
 	// 全部标记为已读
-	services.MessageService.MarkReadAll(user.Id)
+	services.MessageService.MarkRead(user.Id)
 
-	return simple.JsonCursorData(render.BuildMessages(messages), strconv.FormatInt(cursor, 10))
+	return simple.JsonPageData(render.BuildMessages(messages), paging)
+}
+
+// 最新用户
+func (c *UserController) GetNewest() *simple.JsonResult {
+	users := services.UserService.Find(simple.NewSqlCnd().Eq("type", constants.UserTypeNormal).Desc("id").Limit(10))
+	return simple.JsonData(render.BuildUsers(users))
+}
+
+// 用户积分记录
+func (c *UserController) GetScorelogs() *simple.JsonResult {
+	page := simple.FormValueIntDefault(c.Ctx, "page", 1)
+	user := services.UserTokenService.GetCurrent(c.Ctx)
+	// 用户必须登录
+	if user == nil {
+		return simple.JsonError(simple.ErrorNotLogin)
+	}
+
+	logs, paging := services.UserScoreLogService.FindPageByCnd(simple.NewSqlCnd().
+		Eq("user_id", user.Id).
+		Page(page, 20).Desc("id"))
+
+	return simple.JsonPageData(logs, paging)
+}
+
+// 积分排行
+func (c *UserController) GetScoreRank() *simple.JsonResult {
+	userScores := services.UserScoreService.Find(simple.NewSqlCnd().Desc("score").Limit(10))
+	var results []*model.UserInfo
+	for _, userScore := range userScores {
+		results = append(results, render.BuildUserDefaultIfNull(userScore.UserId))
+	}
+	return simple.JsonData(results)
+}
+
+// 禁言
+func (c *UserController) PostForbidden() *simple.JsonResult {
+	user := services.UserTokenService.GetCurrent(c.Ctx)
+	if user == nil {
+		return simple.JsonError(simple.ErrorNotLogin)
+	}
+	if !user.HasAnyRole(constants.RoleOwner, constants.RoleAdmin) {
+		return simple.JsonErrorMsg("无权限")
+	}
+	var (
+		userId = simple.FormValueInt64Default(c.Ctx, "userId", 0)
+		days   = simple.FormValueIntDefault(c.Ctx, "days", 0)
+		reason = simple.FormValue(c.Ctx, "reason")
+	)
+	if userId < 0 {
+		return simple.JsonErrorMsg("请传入：userId")
+	}
+	if days == 0 {
+		services.UserService.RemoveForbidden(user.Id, userId, c.Ctx.Request())
+	} else {
+		if err := services.UserService.Forbidden(user.Id, userId, days, reason, c.Ctx.Request()); err != nil {
+			return simple.JsonErrorMsg(err.Error())
+		}
+	}
+	return simple.JsonSuccess()
+}
+
+// PostEmailVerify 请求邮箱验证邮件S
+func (c *UserController) PostEmailVerify() *simple.JsonResult {
+	user := services.UserTokenService.GetCurrent(c.Ctx)
+	if user == nil {
+		return simple.JsonError(simple.ErrorNotLogin)
+	}
+	if err := services.UserService.SendEmailVerifyEmail(user.Id); err != nil {
+		return simple.JsonErrorMsg(err.Error())
+	}
+	return simple.JsonSuccess()
+}
+
+// GetEmailVerify 获取邮箱验证码
+func (c *UserController) GetEmailVerify() *simple.JsonResult {
+	user := services.UserTokenService.GetCurrent(c.Ctx)
+	if user == nil {
+		return simple.JsonError(simple.ErrorNotLogin)
+	}
+	token := simple.FormValue(c.Ctx, "token")
+	if simple.IsBlank(token) {
+		return simple.JsonErrorMsg("非法请求")
+	}
+	if err := services.UserService.VerifyEmail(user.Id, token); err != nil {
+		return simple.JsonErrorMsg(err.Error())
+	}
+	return simple.JsonSuccess()
+}
+
+// PostCheckin 签到
+func (c *UserController) PostCheckin() *simple.JsonResult {
+	user := services.UserTokenService.GetCurrent(c.Ctx)
+	if err := services.UserService.CheckPostStatus(user); err != nil {
+		return simple.JsonError(err)
+	}
+	err := services.CheckInService.CheckIn(user.Id)
+	if err == nil {
+		return simple.JsonSuccess()
+	} else {
+		return simple.JsonErrorMsg(err.Error())
+	}
+}
+
+// GetCheckin 获取签到信息
+func (c *UserController) GetCheckin() *simple.JsonResult {
+	user := services.UserTokenService.GetCurrent(c.Ctx)
+	if user == nil {
+		return simple.JsonSuccess()
+	}
+	checkIn := services.CheckInService.GetByUserId(user.Id)
+	if checkIn != nil {
+		today := services.CheckInService.GetDayName(time.Now())
+		return simple.NewRspBuilder(checkIn).
+			Put("checkIn", checkIn.LatestDayName == today). // 今日是否已签到
+			JsonResult()
+	}
+	return simple.JsonSuccess()
 }

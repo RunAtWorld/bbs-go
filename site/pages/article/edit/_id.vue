@@ -1,74 +1,67 @@
 <template>
   <section class="main">
-    <div class="container">
-      <div class="columns">
-        <div class="column is-21">
-          <div class="widget">
-            <div class="header">
-              <nav class="breadcrumb" aria-label="breadcrumbs">
-                <ul>
-                  <li> <a href="/">首页</a> </li>
-                  <li>
-                    <a :href="'/user/' + currentUser.id + '?tab=topics'">{{ currentUser.nickname }}</a>
-                  </li>
-                  <li class="is-active">
-                    <a href="#" aria-current="page">文章</a>
-                  </li>
-                </ul>
-              </nav>
+    <div class="container main-container is-white left-main">
+      <div class="left-container">
+        <div class="widget">
+          <div class="widget-header">
+            <nav class="breadcrumb">
+              <ul>
+                <li><a href="/">首页</a></li>
+                <li>
+                  <a :href="'/user/' + currentUser.id + '?tab=topics'">{{
+                    currentUser.nickname
+                  }}</a>
+                </li>
+                <li class="is-active">
+                  <a href="#" aria-current="page">文章</a>
+                </li>
+              </ul>
+            </nav>
+          </div>
+          <div class="widget-content">
+            <div class="field">
+              <div class="control">
+                <input
+                  v-model="postForm.title"
+                  class="input"
+                  type="text"
+                  placeholder="标题"
+                />
+              </div>
             </div>
-            <div class="content">
-              <div class="field">
-                <div class="control">
-                  <input
-                    v-model="postForm.title"
-                    class="input"
-                    type="text"
-                    placeholder="标题"
-                  >
-                </div>
-              </div>
 
-              <div class="field">
-                <div class="control">
-                  <tag-input v-model="postForm.tags" />
-                </div>
+            <div class="field">
+              <div class="control">
+                <markdown-editor
+                  v-model="postForm.content"
+                  editor-id="articleEditEditor"
+                  placeholder="请输入内容，将图片复制或拖入编辑器可上传"
+                />
               </div>
+            </div>
 
-              <div class="field">
-                <div class="control">
-                  <vditor v-model="postForm.content" />
-                </div>
+            <div class="field">
+              <div class="control">
+                <tag-input v-model="postForm.tags" />
               </div>
+            </div>
 
-              <div class="field is-grouped">
-                <div class="control">
-                  <a class="button is-success" :class="{'is-loading': publishing}" :disabled="publishing" @click="submitCreate">提交更改</a>
-                </div>
+            <div class="field is-grouped">
+              <div class="control">
+                <a
+                  :class="{ 'is-loading': publishing }"
+                  :disabled="publishing"
+                  class="button is-success"
+                  @click="submitCreate"
+                  >提交更改</a
+                >
               </div>
             </div>
           </div>
         </div>
-        <div class="column is-3">
-          <div class="widget">
-            <div class="header">
-              Markdown 语法参考
-            </div>
-            <div class="content">
-              <ol>
-                <li> <tt>### 单行的标题</tt> </li>
-                <li> <tt>**粗体**</tt> </li>
-                <li> <tt>`console.log('行内代码')`</tt> </li>
-                <li> <tt>```js\n code \n```</tt> 标记代码块 </li>
-                <li> <tt>[内容](链接)</tt> </li>
-                <li> <tt>![文字说明](图片链接)</tt> </li>
-              </ol>
-              <span>
-                <a href="https://mlog.club/article/5522" target="_blank">Markdown 文档</a>
-              </span>
-            </div>
-          </div>
-        </div>
+      </div>
+      <div class="right-container">
+        <markdown-help />
       </div>
     </div>
   </section>
@@ -77,10 +70,35 @@
 <script>
 import utils from '~/common/utils'
 import TagInput from '~/components/TagInput'
+import MarkdownHelp from '~/components/MarkdownHelp'
+import MarkdownEditor from '~/components/MarkdownEditor'
+
 export default {
   middleware: 'authenticated',
   components: {
-    TagInput
+    TagInput,
+    MarkdownHelp,
+    MarkdownEditor,
+  },
+  async asyncData({ $axios, params, error }) {
+    try {
+      const [article] = await Promise.all([
+        $axios.get('/api/article/edit/' + params.id),
+      ])
+      return {
+        article,
+        postForm: {
+          title: article.title,
+          tags: article.tags,
+          content: article.content,
+        },
+      }
+    } catch (e) {
+      error({
+        statusCode: 403,
+        message: e.message || '403',
+      })
+    }
   },
   data() {
     return {
@@ -88,31 +106,14 @@ export default {
       postForm: {
         title: '',
         tags: [],
-        content: ''
-      }
+        content: '',
+      },
     }
   },
-  head() {
-    return {
-      title: this.$siteTitle('发表话题')
-    }
-  },
-  async asyncData({ $axios, params }) {
-    const [currentUser, article] = await Promise.all([
-      $axios.get('/api/user/current'),
-      $axios.get('/api/article/edit/' + params.id)
-    ])
-    return {
-      currentUser: currentUser,
-      article: article,
-      postForm: {
-        title: article.title,
-        tags: article.tags,
-        content: article.content
-      }
-    }
-  },
-  mounted() {
+  computed: {
+    currentUser() {
+      return this.$store.state.user.current
+    },
   },
   methods: {
     async submitCreate() {
@@ -123,26 +124,33 @@ export default {
       me.publishing = true
 
       try {
-        const article = await this.$axios.post('/api/article/edit/' + this.article.articleId, {
-          title: this.postForm.title,
-          content: this.postForm.content,
-          tags: this.postForm.tags ? this.postForm.tags.join(',') : ''
-        })
+        const article = await this.$axios.post(
+          '/api/article/edit/' + this.article.articleId,
+          {
+            title: this.postForm.title,
+            content: this.postForm.content,
+            tags: this.postForm.tags ? this.postForm.tags.join(',') : '',
+          }
+        )
         this.$toast.success('修改成功', {
           duration: 2000,
-          onComplete: function () {
+          onComplete() {
             utils.linkTo('/article/' + article.articleId)
-          }
+          },
         })
       } catch (e) {
         console.error(e)
         me.publishing = false
         this.$toast.error('提交失败：' + (e.message || e))
       }
+    },
+  },
+  head() {
+    return {
+      title: this.$siteTitle('修改文章'),
     }
-  }
+  },
 }
 </script>
 
-<style lang="scss" scoped>
-</style>
+<style lang="scss" scoped></style>

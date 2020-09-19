@@ -1,61 +1,57 @@
 <template>
   <section class="main">
-    <div class="container">
-      <div class="columns">
-        <div class="column is-9">
-          <div class="main-body">
-            <div class="tabs">
-              <ul>
-                <li :class="{'is-active': activeTab === 'articles'}">
-                  <a :href="'/user/' + user.id + '?tab=articles'">
-                    <span class="icon is-small">
-                      <i class="iconfont icon-article" aria-hidden="true" />
-                    </span>
-                    <span>文章</span>
-                  </a>
-                </li>
-                <li :class="{'is-active': activeTab === 'topics'}">
-                  <a :href="'/user/' + user.id + '?tab=topics'">
-                    <span class="icon is-small">
-                      <i class="iconfont icon-topic" aria-hidden="true" />
-                    </span>
-                    <span>话题</span>
-                  </a>
-                </li>
-              </ul>
-            </div>
+    <div class="container main-container left-main">
+      <div class="left-container">
+        <user-profile :user="user" />
 
-            <div v-if="activeTab === 'articles'">
-              <div v-if="recentArticles && recentArticles.length">
-                <article-list :articles="recentArticles" />
-                <div class="more">
-                  <a :href="'/user/' + user.id + '/articles'">查看更多&gt;&gt;</a>
-                </div>
-              </div>
-              <div v-else class="notification is-primary" style="margin-top: 10px;">
-                暂无文章
+        <div class="tabs-warp">
+          <div class="tabs">
+            <ul>
+              <li :class="{ 'is-active': activeTab === 'topics' }">
+                <a :href="'/user/' + user.id + '?tab=topics'">
+                  <span class="icon is-small">
+                    <i class="iconfont icon-topic" aria-hidden="true" />
+                  </span>
+                  <span>话题</span>
+                </a>
+              </li>
+              <li :class="{ 'is-active': activeTab === 'articles' }">
+                <a :href="'/user/' + user.id + '?tab=articles'">
+                  <span class="icon is-small">
+                    <i class="iconfont icon-article" aria-hidden="true" />
+                  </span>
+                  <span>文章</span>
+                </a>
+              </li>
+            </ul>
+          </div>
+
+          <div v-if="activeTab === 'topics'">
+            <div v-if="recentTopics && recentTopics.length">
+              <topic-list :topics="recentTopics" :show-avatar="false" />
+              <div class="more">
+                <a :href="'/user/' + user.id + '/topics'">查看更多&gt;&gt;</a>
               </div>
             </div>
-
-            <div v-if="activeTab === 'topics'">
-              <div v-if="recentTopics && recentTopics.length">
-                <topic-list :topics="recentTopics" />
-                <div class="more">
-                  <a :href="'/user/' + user.id + '/topics'">查看更多&gt;&gt;</a>
-                </div>
-              </div>
-              <div v-else class="notification is-primary" style="margin-top: 10px;">
-                暂无话题
-              </div>
+            <div v-else class="notification is-primary">
+              暂无话题
             </div>
           </div>
-        </div>
-        <div class="column is-3">
-          <div class="main-aside">
-            <user-center-sidebar :user="user" :current-user="currentUser" />
+
+          <div v-if="activeTab === 'articles'">
+            <div v-if="recentArticles && recentArticles.length">
+              <article-list :articles="recentArticles" />
+              <div class="more">
+                <a :href="'/user/' + user.id + '/articles'">查看更多&gt;&gt;</a>
+              </div>
+            </div>
+            <div v-else class="notification is-primary">
+              暂无文章
+            </div>
           </div>
         </div>
       </div>
+      <user-center-sidebar :user="user" />
     </div>
   </section>
 </template>
@@ -63,61 +59,80 @@
 <script>
 import TopicList from '~/components/TopicList'
 import ArticleList from '~/components/ArticleList'
+import UserProfile from '~/components/UserProfile'
 import UserCenterSidebar from '~/components/UserCenterSidebar'
-const defaultTab = 'articles'
+
+const defaultTab = 'topics'
+
 export default {
   components: {
-    TopicList, ArticleList, UserCenterSidebar
+    TopicList,
+    ArticleList,
+    UserProfile,
+    UserCenterSidebar,
   },
-  data() {
-    return {}
-  },
-  head() {
-    return {
-      title: this.$siteTitle(this.user.nickname)
+  async asyncData({ $axios, params, query, error }) {
+    let user
+    try {
+      user = await $axios.get('/api/user/' + params.userId)
+    } catch (err) {
+      error({
+        statusCode: 404,
+        message: err.message || '系统错误',
+      })
+      return
     }
-  },
-  computed: {
-    // 是否是主人态
-    isOwner: function () {
-      return (
-        this.user && this.currentUser && this.user.id === this.currentUser.id
-      )
-    }
-  },
-  async asyncData({ $axios, params, query }) {
+
     const activeTab = query.tab || defaultTab
-    const [currentUser, user] = await Promise.all([
-      $axios.get('/api/user/current'),
-      $axios.get('/api/user/' + params.userId)
-    ])
     let recentTopics = null
     let recentArticles = null
     if (activeTab === 'topics') {
       recentTopics = await $axios.get('/api/topic/user/recent', {
-        params: { userId: params.userId }
+        params: { userId: params.userId },
       })
     } else if (activeTab === 'articles') {
       recentArticles = await $axios.get('/api/article/user/recent', {
-        params: { userId: params.userId }
+        params: { userId: params.userId },
       })
     }
     return {
-      activeTab: activeTab,
-      currentUser: currentUser,
-      user: user,
-      recentTopics: recentTopics,
-      recentArticles: recentArticles
+      activeTab,
+      user,
+      recentTopics,
+      recentArticles,
     }
-  }
+  },
+  data() {
+    return {}
+  },
+  computed: {
+    currentUser() {
+      return this.$store.state.user.current
+    },
+    isOwner() {
+      const current = this.$store.state.user.current
+      return this.user && current && this.user.id === current.id
+    },
+  },
+  head() {
+    return {
+      title: this.$siteTitle(this.user.nickname),
+    }
+  },
 }
 </script>
 
 <style lang="scss" scoped>
-.tabs {
-  margin-bottom: 5px;
-}
-.more {
-  text-align: right;
+.tabs-warp {
+  background: #fff;
+  padding: 0 10px 10px;
+
+  .tabs {
+    margin-bottom: 5px;
+  }
+
+  .more {
+    text-align: right;
+  }
 }
 </style>

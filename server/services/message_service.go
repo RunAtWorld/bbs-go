@@ -1,158 +1,234 @@
 package services
 
 import (
-	"github.com/mlogclub/simple"
+	"bbs-go/common/urls"
+	"bbs-go/model/constants"
+	"sync"
 
-	"github.com/mlogclub/bbs-go/common"
-	"github.com/mlogclub/bbs-go/common/email"
-	"github.com/mlogclub/bbs-go/common/urls"
-	"github.com/mlogclub/bbs-go/model"
-	"github.com/mlogclub/bbs-go/repositories"
-	"github.com/mlogclub/bbs-go/services/cache"
+	"github.com/mlogclub/simple"
+	"github.com/sirupsen/logrus"
+
+	"bbs-go/cache"
+	"bbs-go/common"
+	"bbs-go/common/email"
+	"bbs-go/model"
+	"bbs-go/repositories"
 )
 
 var MessageService = newMessageService()
 
+var messageLog = logrus.WithFields(logrus.Fields{
+	"type": "message",
+})
+
 func newMessageService() *messageService {
-	return &messageService{}
+	return &messageService{
+		messagesChan: make(chan *model.Message),
+	}
 }
 
 type messageService struct {
+	messagesChan        chan *model.Message
+	messagesConsumeOnce sync.Once
 }
 
-func (this *messageService) Get(id int64) *model.Message {
-	return repositories.MessageRepository.Get(simple.GetDB(), id)
+func (s *messageService) Get(id int64) *model.Message {
+	return repositories.MessageRepository.Get(simple.DB(), id)
 }
 
-func (this *messageService) Take(where ...interface{}) *model.Message {
-	return repositories.MessageRepository.Take(simple.GetDB(), where...)
+func (s *messageService) Take(where ...interface{}) *model.Message {
+	return repositories.MessageRepository.Take(simple.DB(), where...)
 }
 
-func (this *messageService) QueryCnd(cnd *simple.QueryCnd) (list []model.Message, err error) {
-	return repositories.MessageRepository.QueryCnd(simple.GetDB(), cnd)
+func (s *messageService) Find(cnd *simple.SqlCnd) []model.Message {
+	return repositories.MessageRepository.Find(simple.DB(), cnd)
 }
 
-func (this *messageService) Query(queries *simple.ParamQueries) (list []model.Message, paging *simple.Paging) {
-	return repositories.MessageRepository.Query(simple.GetDB(), queries)
+func (s *messageService) FindOne(cnd *simple.SqlCnd) *model.Message {
+	return repositories.MessageRepository.FindOne(simple.DB(), cnd)
 }
 
-func (this *messageService) Create(t *model.Message) error {
-	return repositories.MessageRepository.Create(simple.GetDB(), t)
+func (s *messageService) FindPageByParams(params *simple.QueryParams) (list []model.Message, paging *simple.Paging) {
+	return repositories.MessageRepository.FindPageByParams(simple.DB(), params)
 }
 
-func (this *messageService) Update(t *model.Message) error {
-	return repositories.MessageRepository.Update(simple.GetDB(), t)
+func (s *messageService) FindPageByCnd(cnd *simple.SqlCnd) (list []model.Message, paging *simple.Paging) {
+	return repositories.MessageRepository.FindPageByCnd(simple.DB(), cnd)
 }
 
-func (this *messageService) Updates(id int64, columns map[string]interface{}) error {
-	return repositories.MessageRepository.Updates(simple.GetDB(), id, columns)
+func (s *messageService) Create(t *model.Message) error {
+	return repositories.MessageRepository.Create(simple.DB(), t)
 }
 
-func (this *messageService) UpdateColumn(id int64, name string, value interface{}) error {
-	return repositories.MessageRepository.UpdateColumn(simple.GetDB(), id, name, value)
+func (s *messageService) Update(t *model.Message) error {
+	return repositories.MessageRepository.Update(simple.DB(), t)
 }
 
-func (this *messageService) Delete(id int64) {
-	repositories.MessageRepository.Delete(simple.GetDB(), id)
+func (s *messageService) Updates(id int64, columns map[string]interface{}) error {
+	return repositories.MessageRepository.Updates(simple.DB(), id, columns)
 }
 
-func (this *messageService) GetUnReadCount(userId int64) (count int64) {
-	simple.GetDB().Where("user_id = ? and status = ?", userId, model.MsgStatusUnread).Model(&model.Message{}).Count(&count)
+func (s *messageService) UpdateColumn(id int64, name string, value interface{}) error {
+	return repositories.MessageRepository.UpdateColumn(simple.DB(), id, name, value)
+}
+
+func (s *messageService) Delete(id int64) {
+	repositories.MessageRepository.Delete(simple.DB(), id)
+}
+
+// 获取未读消息数量
+func (s *messageService) GetUnReadCount(userId int64) (count int64) {
+	simple.DB().Where("user_id = ? and status = ?", userId, constants.MsgStatusUnread).Model(&model.Message{}).Count(&count)
 	return
 }
 
-// 读消息
-func (this *messageService) Read(id int64) *model.Message {
-	msg := this.Get(id)
-	if msg != nil && msg.Status == model.MsgStatusUnread {
-		_ = this.UpdateColumn(id, "status", model.MsgStatusReaded) // 标记为已读
-	}
-	return msg
-}
-
 // 将所有消息标记为已读
-func (this *messageService) MarkReadAll(userId int64) {
-	simple.GetDB().Exec("update t_message set status = ? where user_id = ? and status = ?", model.MsgStatusReaded,
-		userId, model.MsgStatusUnread)
+func (s *messageService) MarkRead(userId int64) {
+	simple.DB().Exec("update t_message set status = ? where user_id = ? and status = ?", constants.MsgStatusReaded,
+		userId, constants.MsgStatusUnread)
 }
 
-// 发送消息
-// fromId: 消息发送人
-// toId: 消息接收人
-func (this *messageService) Send(fromId, toId int64, content, quoteContent string, msgType int, extraData map[string]interface{}) {
-	extraDataStr, _ := simple.FormatJson(extraData)
-	message := &model.Message{
+// 评论被回复消息
+func (s *messageService) SendCommentMsg(comment *model.Comment) {
+	user := cache.UserCache.Get(comment.UserId)
+	quote := s.getQuoteComment(comment.QuoteId)
+	summary := common.GetSummary(comment.ContentType, comment.Content)
+
+	var (
+		fromId       = comment.UserId // 消息发送人
+		authorId     int64            // 帖子作者编号
+		content      string           // 消息内容
+		quoteContent string           // 引用内容
+	)
+
+	if comment.EntityType == constants.EntityArticle { // 文章被评论
+		article := repositories.ArticleRepository.Get(simple.DB(), comment.EntityId)
+		if article != nil {
+			authorId = article.UserId
+			content = user.Nickname + " 回复了你的文章：" + summary
+			quoteContent = "《" + article.Title + "》"
+		}
+	} else if comment.EntityType == constants.EntityTopic { // 话题被评论
+		topic := repositories.TopicRepository.Get(simple.DB(), comment.EntityId)
+		if topic != nil {
+			authorId = topic.UserId
+			content = user.Nickname + " 回复了你的话题：" + summary
+			quoteContent = "《" + topic.Title + "》"
+		}
+	} else if comment.EntityType == constants.EntityTweet { // 动态被评论
+		tweet := repositories.TweetRepository.Get(simple.DB(), comment.EntityId)
+		if tweet != nil {
+			authorId = tweet.UserId
+			content = user.Nickname + " 回复了你的话题：" + summary
+			quoteContent = tweet.Content
+		}
+	}
+
+	if authorId <= 0 {
+		return
+	}
+
+	if quote != nil { // 回复跟帖
+		if comment.UserId != authorId && quote.UserId != authorId { // 回复人和帖子作者不是同一个人，并且引用的用户不是帖子作者，需要给帖子作者也发送一下消息
+			// 给帖子作者发消息
+			s.Produce(fromId, authorId, content, quoteContent, constants.MsgTypeComment, map[string]interface{}{
+				"entityType": comment.EntityType,
+				"entityId":   comment.EntityId,
+				"commentId":  comment.Id,
+				"quoteId":    comment.QuoteId,
+			})
+		}
+
+		// 给被引用的人发消息
+		s.Produce(fromId, quote.UserId, user.Nickname+" 回复了你的评论："+summary,
+			common.GetMarkdownSummary(quote.Content), constants.MsgTypeComment, map[string]interface{}{
+				"entityType": comment.EntityType,
+				"entityId":   comment.EntityId,
+				"commentId":  comment.Id,
+				"quoteId":    comment.QuoteId,
+			})
+	} else if comment.UserId != authorId { // 回复主贴，并且不是自己回复自己
+		// 给帖子作者发消息
+		s.Produce(fromId, authorId, content, quoteContent, constants.MsgTypeComment, map[string]interface{}{
+			"entityType": comment.EntityType,
+			"entityId":   comment.EntityId,
+			"commentId":  comment.Id,
+			"quoteId":    comment.QuoteId,
+		})
+	}
+}
+
+func (s *messageService) getQuoteComment(quoteId int64) *model.Comment {
+	if quoteId <= 0 {
+		return nil
+	}
+	return repositories.CommentRepository.Get(simple.DB(), quoteId)
+}
+
+// 生产，将消息数据放入chan
+func (s *messageService) Produce(fromId, toId int64, content, quoteContent string, msgType int,
+	extraDataMap map[string]interface{}) {
+	to := cache.UserCache.Get(toId)
+	if to == nil || to.Type != constants.UserTypeNormal {
+		return
+	}
+
+	s.Consume()
+
+	var (
+		extraData string
+		err       error
+	)
+	if extraData, err = simple.FormatJson(extraDataMap); err != nil {
+		messageLog.Error("格式化extraData错误", err)
+	}
+	s.messagesChan <- &model.Message{
 		FromId:       fromId,
 		UserId:       toId,
 		Content:      content,
 		QuoteContent: quoteContent,
 		Type:         msgType,
-		ExtraData:    extraDataStr,
-		Status:       model.MsgStatusUnread,
+		ExtraData:    extraData,
+		Status:       constants.MsgStatusUnread,
 		CreateTime:   simple.NowTimestamp(),
 	}
-	err := this.Create(message)
-	if err == nil {
+}
+
+// 消费，消费chan中的消息
+func (s *messageService) Consume() {
+	s.messagesConsumeOnce.Do(func() {
 		go func() {
-			this.sendEmailNotice(message)
+			messageLog.Info("开始消费系统消息...")
+			for {
+				msg := <-s.messagesChan
+				messageLog.Info("处理消息：from=", msg.FromId, " to=", msg.UserId)
+
+				if err := s.Create(msg); err != nil {
+					messageLog.Info("创建消息发生异常...", err)
+				} else {
+					s.SendEmailNotice(msg)
+				}
+			}
 		}()
-	}
+	})
 }
 
-func (this *messageService) sendEmailNotice(message *model.Message) {
+// 发送邮件通知
+func (s *messageService) SendEmailNotice(message *model.Message) {
 	user := cache.UserCache.Get(message.UserId)
-	if user == nil || len(user.Email) == 0 {
-		return
-	}
-	email.SendTemplateEmail(user.Email, "M-LOG新消息提醒", "M-LOG新消息提醒", message.Content,
-		message.QuoteContent, urls.AbsUrl("/user/messages"))
-}
+	if user != nil && len(user.Email.String) > 0 {
+		var (
+			siteTitle  = cache.SysConfigCache.GetValue(constants.SysConfigSiteTitle)
+			emailTitle = "新消息提醒 - " + siteTitle
+		)
 
-func (this *messageService) SendCommentMsg(comment *model.Comment) {
-	commentUser := repositories.UserRepository.Get(simple.GetDB(), comment.UserId)
-	commentSummary := common.GetMarkdownSummary(comment.Content)
-	// 引用消息
-	if comment.QuoteId > 0 {
-		quote := repositories.CommentRepository.Get(simple.GetDB(), comment.QuoteId)
-		if quote != nil && quote.UserId != comment.UserId {
-			msgContent := commentUser.Nickname + " 回复了你的评论：" + commentSummary
-			quoteContent := common.GetMarkdownSummary(quote.Content)
-			this.Send(comment.UserId, quote.UserId, msgContent, quoteContent, model.MsgTypeComment, map[string]interface{}{
-				"entityType": comment.EntityType,
-				"entityId":   comment.EntityId,
-				"commentId":  comment.Id,
-				"quoteId":    comment.QuoteId,
+		_ = email.SendTemplateEmail(user.Email.String, emailTitle, emailTitle, message.Content,
+			message.QuoteContent, &model.ActionLink{
+				Title: "点击查看详情",
+				Url:   urls.AbsUrl("/user/messages"),
 			})
-		}
-	}
-
-	// 文章评论消息
-	{
-		var userId int64 = 0
-		var msgContent = ""
-		var msgQuoteContent = ""
-		if comment.EntityType == model.EntityTypeArticle {
-			article := repositories.ArticleRepository.Get(simple.GetDB(), comment.EntityId)
-			if article != nil && article.UserId != comment.UserId {
-				userId = article.UserId
-				msgContent = commentUser.Nickname + " 回复了你的文章：" + commentSummary
-				msgQuoteContent = "《" + article.Title + "》"
-			}
-		} else if comment.EntityType == model.EntityTypeTopic {
-			topic := repositories.TopicRepository.Get(simple.GetDB(), comment.EntityId)
-			if topic != nil && topic.UserId != comment.UserId {
-				userId = topic.UserId
-				msgContent = commentUser.Nickname + " 回复了你的主题：" + commentSummary
-				msgQuoteContent = "《" + topic.Title + "》"
-			}
-		}
-		if userId > 0 {
-			this.Send(comment.UserId, userId, msgContent, msgQuoteContent, model.MsgTypeComment, map[string]interface{}{
-				"entityType": comment.EntityType,
-				"entityId":   comment.EntityId,
-				"commentId":  comment.Id,
-				"quoteId":    comment.QuoteId,
-			})
-		}
+		messageLog.Info("发送邮件...email=", user.Email)
+	} else {
+		messageLog.Info("邮件未发送，没设置邮箱...")
 	}
 }

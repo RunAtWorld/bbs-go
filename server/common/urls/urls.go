@@ -7,23 +7,29 @@ import (
 
 	"github.com/sirupsen/logrus"
 
-	"github.com/mlogclub/bbs-go/common/config"
+	"bbs-go/config"
 )
 
-func IsInternalUrl(rawUrl string) bool {
-	u, err := url.Parse(config.Conf.BaseUrl)
+// 是否是内部链接
+func IsInternalUrl(href string) bool {
+	if IsAnchor(href) {
+		return true
+	}
+	u, err := url.Parse(config.Instance.BaseUrl)
 	if err != nil {
 		logrus.Error(err)
 		return false
 	}
-	if strings.Index(rawUrl, "#") == 0 { // 如果是“#”开头，说明是锚链接
-		return true
-	}
-	return strings.Contains(rawUrl, u.Host)
+	return strings.Contains(href, u.Host)
+}
+
+// 是否是锚链接
+func IsAnchor(href string) bool {
+	return strings.Index(href, "#") == 0
 }
 
 func AbsUrl(path string) string {
-	return config.Conf.BaseUrl + path
+	return config.Instance.BaseUrl + path
 }
 
 // 用户主页
@@ -36,12 +42,47 @@ func ArticleUrl(articleId int64) string {
 	return AbsUrl("/article/" + strconv.FormatInt(articleId, 10))
 }
 
+// 标签文章列表
+func TagArticlesUrl(tagId int64) string {
+	return AbsUrl("/articles/" + strconv.FormatInt(tagId, 10))
+}
+
 // 话题详情
 func TopicUrl(topicId int64) string {
 	return AbsUrl("/topic/" + strconv.FormatInt(topicId, 10))
 }
 
+// 动态详情
+func TweetUrl(tweetId int64) string {
+	return AbsUrl("/tweet/" + strconv.FormatInt(tweetId, 10))
+}
+
 // 项目详情
 func ProjectUrl(projectId int64) string {
 	return AbsUrl("/project/" + strconv.FormatInt(projectId, 10))
+}
+
+func UrlJoin(parts ...string) string {
+	sep := "/"
+	var ss []string
+	for i, part := range parts {
+		part = strings.TrimSpace(part)
+		var (
+			from = 0
+			to   = len(part)
+		)
+		if strings.Index(part, sep) == 0 {
+			from = 1
+		}
+		if strings.LastIndex(part, sep) == len(part)-1 {
+			to = len(part) - 1
+		}
+		part = part[from:to]
+
+		ss = append(ss, part)
+		if i != len(parts)-1 {
+			ss = append(ss, sep)
+		}
+	}
+	return strings.Join(ss, "")
 }

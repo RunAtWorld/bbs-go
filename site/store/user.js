@@ -1,6 +1,6 @@
 export const state = () => ({
   current: null,
-  userToken: null
+  userToken: null,
 })
 
 export const mutations = {
@@ -9,50 +9,89 @@ export const mutations = {
   },
   setUserToken(state, userToken) {
     state.userToken = userToken
-  }
+  },
 }
 
 export const actions = {
   // 登录成功
   loginSuccess(context, { token, user }) {
-    this.$cookies.set('userToken', token, { maxAge: 86400 * 7, path: '/' })
-    this.$cookies.set('user', user, { maxAge: 86400 * 7, path: '/' })
+    const config = context.rootState.config.config
+    const cookieMaxAge = 86400 * config.tokenExpireDays
+    this.$cookies.set('userToken', token, { maxAge: cookieMaxAge, path: '/' })
     context.commit('setUserToken', token)
     context.commit('setCurrent', user)
   },
 
-  // 设置当前登录用户
-  setCurrentUser(context, user) {
-    this.$cookies.set('user', user, { maxAge: 86400 * 7, path: '/' })
+  // 获取当前登录用户
+  async getCurrentUser(context) {
+    const user = await this.$axios.get('/api/user/current')
     context.commit('setCurrent', user)
+    return user
   },
 
   // 登录
-  async signin(context, { username, password }) {
+  async signin(context, { captchaId, captchaCode, username, password }) {
     const ret = await this.$axios.post('/api/login/signin', {
-      username: username,
-      password: password
+      captchaId,
+      captchaCode,
+      username,
+      password,
     })
     context.dispatch('loginSuccess', ret)
     return ret.user
   },
 
+  // github登录
   async signinByGithub(context, { code, state }) {
     const ret = await this.$axios.get('/api/login/github/callback', {
       params: {
-        code: code,
-        state: state
-      }
+        code,
+        state,
+      },
     })
     context.dispatch('loginSuccess', ret)
     return ret.user
   },
 
+  // qq登录
+  async signinByQQ(context, { code, state }) {
+    const ret = await this.$axios.get('/api/login/qq/callback', {
+      params: {
+        code,
+        state,
+      },
+    })
+    context.dispatch('loginSuccess', ret)
+    return ret.user
+  },
+
+  async signup(
+    context,
+    { captchaId, captchaCode, nickname, username, email, password, rePassword }
+  ) {
+    const ret = await this.$axios.post('/api/login/signup', {
+      captchaId,
+      captchaCode,
+      nickname,
+      username,
+      email,
+      password,
+      rePassword,
+    })
+    context.dispatch('loginSuccess', ret)
+    return ret.user
+  },
+
+  // 退出登录
   async signout(context) {
-    await this.$axios.get('/api/login/signout')
-    this.$cookies.remove('user')
-    this.$cookies.remove('userToken')
+    const userToken = this.$cookies.get('userToken')
+    await this.$axios.get('/api/login/signout', {
+      params: {
+        userToken,
+      },
+    })
     context.commit('setUserToken', null)
     context.commit('setCurrent', null)
-  }
+    this.$cookies.remove('userToken')
+  },
 }

@@ -5,17 +5,22 @@
         <div class="column is-9">
           <div class="main-body">
             <div class="widget">
-              <div class="header">
+              <div class="widget-header">
                 <span>标签</span>
               </div>
-              <div class="content">
+              <div class="widget-content">
                 <div class="tags are-medium">
-                  <span v-for="tag in tagsPage.results" :key="tag.tagId" class="tag is-normal">
+                  <span
+                    v-for="tag in tagsPage.results"
+                    :key="tag.tagId"
+                    class="tag is-normal"
+                  >
                     <a
-                      :href="'/articles/tag/' + tag.tagId "
+                      :href="'/articles/' + tag.tagId"
                       :title="tag.tagName"
                       target="_blank"
-                    >{{ tag.tagName }}</a>
+                      >{{ tag.tagName }}</a
+                    >
                   </span>
                 </div>
               </div>
@@ -25,8 +30,12 @@
         </div>
         <div class="column is-3">
           <div class="main-aside">
-            <active-users :active-users="activeUsers" />
-            <active-tags :active-tags="activeTags" />
+            <site-notice />
+
+            <div class="ad">
+              <!-- 展示广告 -->
+              <adsbygoogle ad-slot="1742173616" />
+            </div>
           </div>
         </div>
       </div>
@@ -35,38 +44,32 @@
 </template>
 
 <script>
-import ActiveUsers from '~/components/ActiveUsers'
-import ActiveTags from '~/components/ActiveTags'
 import Pagination from '~/components/Pagination'
+import SiteNotice from '~/components/SiteNotice'
+
 export default {
   components: {
-    ActiveUsers,
-    ActiveTags,
-    Pagination
+    Pagination,
+    SiteNotice,
+  },
+  async asyncData({ $axios, params }) {
+    const [tagsPage] = await Promise.all([
+      $axios.get('/api/tag/tags', {
+        params: {
+          page: params.page,
+        },
+      }),
+    ])
+    return {
+      tagsPage,
+    }
   },
   head() {
     return {
-      title: this.$siteTitle('标签')
+      title: this.$siteTitle('标签'),
     }
   },
-  async asyncData({ $axios, params }) {
-    const [tagsPage, activeUsers, activeTags] = await Promise.all([
-      $axios.get('/api/tag/tags', {
-        params: {
-          page: params.page
-        }
-      }),
-      $axios.get('/api/user/active'), // 活跃用户
-      $axios.get('/api/tag/active') // 活跃标签
-    ])
-    return {
-      tagsPage: tagsPage,
-      activeUsers: activeUsers,
-      activeTags: activeTags
-    }
-  }
 }
 </script>
 
-<style lang="scss" scoped>
-</style>
+<style lang="scss" scoped></style>

@@ -4,16 +4,25 @@ import (
 	"github.com/robfig/cron"
 	"github.com/sirupsen/logrus"
 
-	"github.com/mlogclub/bbs-go/services/task"
+	"bbs-go/services"
+	"bbs-go/sitemap"
 )
 
 func startSchedule() {
 	c := cron.New()
-	addCronFunc(c, "@every 30m", task.RssTask)
-	addCronFunc(c, "@every 1h", task.SitemapTask)
-	addCronFunc(c, "@every 1h", task.CollectStudyGoLangProjectTask)
-	addCronFunc(c, "@every 1h", task.CollectOschinaProjectTask)
-	addCronFunc(c, "@every 12h", task.BaiduPing)
+
+	// Generate RSS
+	addCronFunc(c, "@every 30m", func() {
+		services.ArticleService.GenerateRss()
+		services.TopicService.GenerateRss()
+		services.ProjectService.GenerateRss()
+	})
+
+	// Generate sitemap
+	addCronFunc(c, "@every 2h", func() {
+		sitemap.Generate()
+	})
+
 	c.Start()
 }
 

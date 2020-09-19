@@ -1,19 +1,26 @@
 <template>
   <section class="main">
-    <div class="container">
-      <div class="columns">
-        <div class="column is-9">
-          <div class="main-body">
-            <nav class="breadcrumb" aria-label="breadcrumbs" style="margin-bottom: 0px;">
+    <div class="container main-container left-main">
+      <div class="left-container">
+        <user-profile :user="currentUser" />
+        <div class="widget">
+          <div class="widget-header">
+            <nav class="breadcrumb">
               <ul>
                 <li><a href="/">首页</a></li>
-                <li><a :href="'/user/' + currentUser.id">{{ currentUser.nickname }}</a></li>
+                <li>
+                  <a :href="'/user/' + currentUser.id">{{
+                    currentUser.nickname
+                  }}</a>
+                </li>
                 <li class="is-active">
                   <a href="#" aria-current="page">收藏列表</a>
                 </li>
               </ul>
             </nav>
+          </div>
 
+          <div class="widget-content">
             <ul v-if="favorites && favorites.length" class="article-list">
               <li v-for="favorite in favorites" :key="favorite.favoriteId">
                 <article v-if="favorite.deleted" class="article-item">
@@ -22,27 +29,21 @@
                   </div>
                 </article>
                 <article v-else class="article-item">
-                  <div class="article-item-left">
-                    <a :href="'/user/' + favorite.user.id" target="_blank">
-                      <img class="avatar" :src="favorite.user.avatar">
-                    </a>
+                  <div class="article-title">
+                    <a :href="favorite.url">{{ favorite.title }}</a>
                   </div>
-
-                  <div class="article-item-right">
-                    <div class="article-title">
-                      <a :href="favorite.url">{{ favorite.title }}</a>
-                    </div>
-
-                    <div class="article-summary">
-                      {{ favorite.content }}
-                    </div>
-
-                    <div class="article-meta">
-                      <span class="article-meta-item"><a
-                        :href="'/user/' + favorite.user.id"
-                      >{{ favorite.user.nickname }}</a></span>
-                      <span class="article-meta-item"><time>{{ favorite.createTime | prettyDate }}</time></span>
-                    </div>
+                  <div class="article-summary">
+                    {{ favorite.content }}
+                  </div>
+                  <div class="article-meta">
+                    <span class="article-meta-item"
+                      ><a :href="'/user/' + favorite.user.id">{{
+                        favorite.user.nickname
+                      }}</a></span
+                    >
+                    <span class="article-meta-item"
+                      ><time>{{ favorite.createTime | prettyDate }}</time></span
+                    >
                   </div>
                 </article>
               </li>
@@ -52,37 +53,33 @@
             </ul>
           </div>
         </div>
-        <div class="column is-3">
-          <div class="main-aside">
-            <user-center-sidebar :user="currentUser" :current-user="currentUser" />
-          </div>
-        </div>
       </div>
+      <user-center-sidebar :user="currentUser" />
     </div>
   </section>
 </template>
 
 <script>
+import UserProfile from '~/components/UserProfile'
 import UserCenterSidebar from '~/components/UserCenterSidebar'
 export default {
   middleware: 'authenticated',
   components: {
-    UserCenterSidebar
+    UserProfile,
+    UserCenterSidebar,
   },
+  async asyncData({ $axios, params }) {},
   data() {
     return {
       favorites: [],
       cursor: 0,
-      hasMore: true
+      hasMore: true,
     }
   },
-  async asyncData({ $axios, params }) {
-    const [currentUser] = await Promise.all([
-      $axios.get('/api/user/current')
-    ])
-    return {
-      currentUser: currentUser
-    }
+  computed: {
+    currentUser() {
+      return this.$store.state.user.current
+    },
   },
   mounted() {
     this.list()
@@ -91,8 +88,8 @@ export default {
     async list() {
       const ret = await this.$axios.get('/api/user/favorites', {
         params: {
-          cursor: this.cursor
-        }
+          cursor: this.cursor,
+        },
       })
       if (ret.results && ret.results.length) {
         this.favorites = this.favorites.concat(ret.results)
@@ -100,8 +97,8 @@ export default {
         this.hasMore = false
       }
       this.cursor = ret.cursor
-    }
-  }
+    },
+  },
 }
 </script>
 
@@ -134,19 +131,6 @@ export default {
     zoom: 1;
     line-height: 24px;
   }
-}
-
-.article-item-left {
-  width: 50px;
-  height: 50px;
-  float: left;
-  vertical-align: middle;
-}
-
-.article-item-right {
-  margin-left: 50px;
-  padding-left: 10px;
-  vertical-align: middle;
 }
 
 article {

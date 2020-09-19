@@ -1,21 +1,25 @@
 package render
 
 import (
-	"html/template"
+	"bbs-go/model/constants"
+	"html"
 	"strconv"
 	"strings"
 
+	"github.com/mlogclub/simple/markdown"
+	"github.com/sirupsen/logrus"
 	"github.com/tidwall/gjson"
 
 	"github.com/PuerkitoBio/goquery"
 	"github.com/mlogclub/simple"
 
-	"github.com/mlogclub/bbs-go/common"
-	"github.com/mlogclub/bbs-go/common/avatar"
-	"github.com/mlogclub/bbs-go/common/urls"
-	"github.com/mlogclub/bbs-go/model"
-	"github.com/mlogclub/bbs-go/services"
-	"github.com/mlogclub/bbs-go/services/cache"
+	"bbs-go/cache"
+	"bbs-go/common"
+	"bbs-go/common/avatar"
+	"bbs-go/common/urls"
+	"bbs-go/config"
+	"bbs-go/model"
+	"bbs-go/services"
 )
 
 func BuildUserDefaultIfNull(id int64) *model.UserInfo {
@@ -23,8 +27,8 @@ func BuildUserDefaultIfNull(id int64) *model.UserInfo {
 	if user == nil {
 		user = &model.User{}
 		user.Id = id
-		user.Username = strconv.FormatInt(id, 10)
-		user.Avatar = avatar.GetDefaultAvatar(id)
+		user.Username = simple.SqlNullString(strconv.FormatInt(id, 10))
+		user.Avatar = avatar.DefaultAvatar
 		user.CreateTime = simple.NowTimestamp()
 	}
 	return BuildUser(user)
@@ -32,9 +36,6 @@ func BuildUserDefaultIfNull(id int64) *model.UserInfo {
 
 func BuildUserById(id int64) *model.UserInfo {
 	user := cache.UserCache.Get(id)
-	if user == nil {
-		return nil
-	}
 	return BuildUser(user)
 }
 
@@ -44,20 +45,43 @@ func BuildUser(user *model.User) *model.UserInfo {
 	}
 	a := user.Avatar
 	if len(a) == 0 {
-		a = avatar.GetDefaultAvatar(user.Id)
+		a = avatar.DefaultAvatar
 	}
 	roles := strings.Split(user.Roles, ",")
-	return &model.UserInfo{
-		Id:          user.Id,
-		Username:    user.Username,
-		Nickname:    user.Nickname,
-		Avatar:      a,
-		Email:       user.Email,
-		Type:        user.Type,
-		Roles:       roles,
-		Description: user.Description,
-		CreateTime:  user.CreateTime,
+	ret := &model.UserInfo{
+		Id:            user.Id,
+		Username:      user.Username.String,
+		Nickname:      user.Nickname,
+		Avatar:        a,
+		SmallAvatar:   HandleOssImageStyleAvatar(a),
+		Email:         user.Email.String,
+		EmailVerified: user.EmailVerified,
+		Type:          user.Type,
+		Roles:         roles,
+		HomePage:      user.HomePage,
+		Description:   user.Description,
+		TopicCount:    user.TopicCount,
+		CommentCount:  user.CommentCount,
+		PasswordSet:   len(user.Password) > 0,
+		Forbidden:     user.IsForbidden(),
+		Status:        user.Status,
+		CreateTime:    user.CreateTime,
 	}
+	if len(ret.Description) == 0 {
+		ret.Description = "这家伙很懒，什么都没留下"
+	}
+	if user.Status == constants.StatusDeleted {
+		ret.Username = "blacklist"
+		ret.Nickname = "黑名单用户"
+		ret.Avatar = avatar.DefaultAvatar
+		ret.Email = ""
+		ret.HomePage = ""
+		ret.Description = ""
+		ret.Forbidden = true
+	} else {
+		ret.Score = cache.UserCache.GetScore(user.Id)
+	}
+	return ret
 }
 
 func BuildUsers(users []model.User) []model.UserInfo {
@@ -74,13 +98,6 @@ func BuildUsers(users []model.User) []model.UserInfo {
 	return responses
 }
 
-func BuildCategory(category *model.Category) *model.CategoryResponse {
-	if category == nil {
-		return nil
-	}
-	return &model.CategoryResponse{CategoryId: category.Id, CategoryName: category.Name}
-}
-
 func BuildArticle(article *model.Article) *model.ArticleResponse {
 	if article == nil {
 		return nil
@@ -90,47 +107,25 @@ func BuildArticle(article *model.Article) *model.ArticleResponse {
 	rsp.ArticleId = article.Id
 	rsp.Title = article.Title
 	rsp.Summary = article.Summary
-	rsp.Share = article.Share
 	rsp.SourceUrl = article.SourceUrl
+	rsp.ViewCount = article.ViewCount
 	rsp.CreateTime = article.CreateTime
+	rsp.Status = article.Status
 
 	rsp.User = BuildUserDefaultIfNull(article.UserId)
-
-	if article.CategoryId > 0 {
-		category := cache.CategoryCache.Get(article.CategoryId)
-		rsp.Category = BuildCategory(category)
-	}
 
 	tagIds := cache.ArticleTagCache.Get(article.Id)
 	tags := cache.TagCache.GetList(tagIds)
 	rsp.Tags = BuildTags(tags)
 
-	if article.ContentType == model.ContentTypeMarkdown {
-		mr := simple.NewMd(simple.MdWithTOC()).Run(article.Content)
-		rsp.Content = template.HTML(BuildHtmlContent(mr.ContentHtml))
-		rsp.Toc = template.HTML(mr.TocHtml)
-		if len(rsp.Summary) == 0 {
-			rsp.Summary = mr.SummaryText
-		}
-	} else {
-		rsp.Content = template.HTML(BuildHtmlContent(article.Content))
-		if len(rsp.Summary) == 0 {
-			rsp.Summary = simple.GetSummary(article.Content, 256)
-		}
+	if article.ContentType == constants.ContentTypeMarkdown {
+		content, _ := markdown.New(markdown.SummaryLen(0)).Run(article.Content)
+		rsp.Content = BuildHtmlContent(content)
+	} else if article.ContentType == constants.ContentTypeHtml {
+		rsp.Content = BuildHtmlContent(article.Content)
 	}
 
 	return rsp
-}
-
-func BuildArticles(articles []model.Article) []model.ArticleResponse {
-	if articles == nil || len(articles) == 0 {
-		return nil
-	}
-	var responses []model.ArticleResponse
-	for _, article := range articles {
-		responses = append(responses, *BuildArticle(&article))
-	}
-	return responses
 }
 
 func BuildSimpleArticle(article *model.Article) *model.ArticleSimpleResponse {
@@ -142,27 +137,22 @@ func BuildSimpleArticle(article *model.Article) *model.ArticleSimpleResponse {
 	rsp.ArticleId = article.Id
 	rsp.Title = article.Title
 	rsp.Summary = article.Summary
-	rsp.Share = article.Share
 	rsp.SourceUrl = article.SourceUrl
+	rsp.ViewCount = article.ViewCount
 	rsp.CreateTime = article.CreateTime
+	rsp.Status = article.Status
 
 	rsp.User = BuildUserDefaultIfNull(article.UserId)
-
-	if article.CategoryId > 0 {
-		category := cache.CategoryCache.Get(article.CategoryId)
-		rsp.Category = BuildCategory(category)
-	}
 
 	tagIds := cache.ArticleTagCache.Get(article.Id)
 	tags := cache.TagCache.GetList(tagIds)
 	rsp.Tags = BuildTags(tags)
 
-	if article.ContentType == model.ContentTypeMarkdown {
+	if article.ContentType == constants.ContentTypeMarkdown {
 		if len(rsp.Summary) == 0 {
-			mr := simple.NewMd(simple.MdWithTOC()).Run(article.Content)
-			rsp.Summary = mr.SummaryText
+			_, rsp.Summary = markdown.New().Run(article.Content)
 		}
-	} else {
+	} else if article.ContentType == constants.ContentTypeHtml {
 		if len(rsp.Summary) == 0 {
 			rsp.Summary = simple.GetSummary(simple.GetHtmlText(article.Content), 256)
 		}
@@ -182,6 +172,28 @@ func BuildSimpleArticles(articles []model.Article) []model.ArticleSimpleResponse
 	return responses
 }
 
+func BuildNode(node *model.TopicNode) *model.NodeResponse {
+	if node == nil {
+		return nil
+	}
+	return &model.NodeResponse{
+		NodeId:      node.Id,
+		Name:        node.Name,
+		Description: node.Description,
+	}
+}
+
+func BuildNodes(nodes []model.TopicNode) []model.NodeResponse {
+	if len(nodes) == 0 {
+		return nil
+	}
+	var ret []model.NodeResponse
+	for _, node := range nodes {
+		ret = append(ret, *BuildNode(&node))
+	}
+	return ret
+}
+
 func BuildTopic(topic *model.Topic) *model.TopicResponse {
 	if topic == nil {
 		return nil
@@ -195,26 +207,21 @@ func BuildTopic(topic *model.Topic) *model.TopicResponse {
 	rsp.LastCommentTime = topic.LastCommentTime
 	rsp.CreateTime = topic.CreateTime
 	rsp.ViewCount = topic.ViewCount
+	rsp.CommentCount = topic.CommentCount
+	rsp.LikeCount = topic.LikeCount
+
+	if topic.NodeId > 0 {
+		node := services.TopicNodeService.Get(topic.NodeId)
+		rsp.Node = BuildNode(node)
+	}
 
 	tags := services.TopicService.GetTopicTags(topic.Id)
 	rsp.Tags = BuildTags(tags)
 
-	mr := simple.NewMd(simple.MdWithTOC()).Run(topic.Content)
-	rsp.Content = template.HTML(BuildHtmlContent(mr.ContentHtml))
-	rsp.Toc = template.HTML(mr.TocHtml)
+	content, _ := markdown.New(markdown.SummaryLen(0)).Run(topic.Content)
+	rsp.Content = BuildHtmlContent(content)
 
 	return rsp
-}
-
-func BuildTopics(topics []model.Topic) []model.TopicResponse {
-	if topics == nil || len(topics) == 0 {
-		return nil
-	}
-	var responses []model.TopicResponse
-	for _, topic := range topics {
-		responses = append(responses, *BuildTopic(&topic))
-	}
-	return responses
 }
 
 func BuildSimpleTopic(topic *model.Topic) *model.TopicSimpleResponse {
@@ -230,6 +237,13 @@ func BuildSimpleTopic(topic *model.Topic) *model.TopicSimpleResponse {
 	rsp.LastCommentTime = topic.LastCommentTime
 	rsp.CreateTime = topic.CreateTime
 	rsp.ViewCount = topic.ViewCount
+	rsp.CommentCount = topic.CommentCount
+	rsp.LikeCount = topic.LikeCount
+
+	if topic.NodeId > 0 {
+		node := services.TopicNodeService.Get(topic.NodeId)
+		rsp.Node = BuildNode(node)
+	}
 
 	tags := services.TopicService.GetTopicTags(topic.Id)
 	rsp.Tags = BuildTags(tags)
@@ -247,6 +261,48 @@ func BuildSimpleTopics(topics []model.Topic) []model.TopicSimpleResponse {
 	return responses
 }
 
+func BuildTweet(tweet *model.Tweet) *model.TweetResponse {
+	if tweet == nil {
+		return nil
+	}
+
+	rsp := &model.TweetResponse{
+		TweetId:      tweet.Id,
+		User:         BuildUserDefaultIfNull(tweet.UserId),
+		Content:      tweet.Content,
+		CommentCount: tweet.CommentCount,
+		LikeCount:    tweet.LikeCount,
+		Status:       tweet.Status,
+		CreateTime:   tweet.CreateTime,
+	}
+	if simple.IsNotBlank(tweet.ImageList) {
+		var images []string
+		if err := simple.ParseJson(tweet.ImageList, &images); err == nil {
+			if len(images) > 0 {
+				var imageList []model.ImageInfo
+				for _, image := range images {
+					imageList = append(imageList, model.ImageInfo{
+						Url:     HandleOssImageStyleDetail(image),
+						Preview: HandleOssImageStylePreview(image),
+					})
+				}
+				rsp.ImageList = imageList
+			}
+		} else {
+			logrus.Error(err)
+		}
+	}
+	return rsp
+}
+
+func BuildTweets(tweets []model.Tweet) []model.TweetResponse {
+	var ret []model.TweetResponse
+	for _, tweet := range tweets {
+		ret = append(ret, *BuildTweet(&tweet))
+	}
+	return ret
+}
+
 func BuildProject(project *model.Project) *model.ProjectResponse {
 	if project == nil {
 		return nil
@@ -262,19 +318,19 @@ func BuildProject(project *model.Project) *model.ProjectResponse {
 	rsp.DocUrl = project.DocUrl
 	rsp.CreateTime = project.CreateTime
 
-	if project.ContentType == model.ContentTypeHtml {
-		rsp.Content = template.HTML(BuildHtmlContent(project.Content))
+	if project.ContentType == constants.ContentTypeHtml {
+		rsp.Content = BuildHtmlContent(project.Content)
 		rsp.Summary = simple.GetSummary(simple.GetHtmlText(project.Content), 256)
 	} else {
-		mr := simple.NewMd().Run(project.Content)
-		rsp.Content = template.HTML(BuildHtmlContent(mr.ContentHtml))
-		rsp.Summary = mr.SummaryText
+		content, summary := markdown.New().Run(project.Content)
+		rsp.Content = BuildHtmlContent(content)
+		rsp.Summary = summary
 	}
 
 	return rsp
 }
 
-func BuildSimpleProjects(projects []model.Project) [] model.ProjectSimpleResponse {
+func BuildSimpleProjects(projects []model.Project) []model.ProjectSimpleResponse {
 	if projects == nil || len(projects) == 0 {
 		return nil
 	}
@@ -300,13 +356,21 @@ func BuildSimpleProject(project *model.Project) *model.ProjectSimpleResponse {
 	rsp.DownloadUrl = project.DownloadUrl
 	rsp.CreateTime = project.CreateTime
 
-	if project.ContentType == model.ContentTypeHtml {
+	if project.ContentType == constants.ContentTypeHtml {
 		rsp.Summary = simple.GetSummary(simple.GetHtmlText(project.Content), 256)
 	} else {
 		rsp.Summary = common.GetMarkdownSummary(project.Content)
 	}
 
 	return rsp
+}
+
+func BuildComments(comments []model.Comment) []model.CommentResponse {
+	var ret []model.CommentResponse
+	for _, comment := range comments {
+		ret = append(ret, *BuildComment(comment))
+	}
+	return ret
 }
 
 func BuildComment(comment model.Comment) *model.CommentResponse {
@@ -317,25 +381,31 @@ func _buildComment(comment *model.Comment, buildQuote bool) *model.CommentRespon
 	if comment == nil {
 		return nil
 	}
-	markdownResult := simple.NewMd().Run(comment.Content)
-	content := template.HTML(markdownResult.ContentHtml)
 
 	ret := &model.CommentResponse{
 		CommentId:  comment.Id,
 		User:       BuildUserDefaultIfNull(comment.UserId),
 		EntityType: comment.EntityType,
 		EntityId:   comment.EntityId,
-		Content:    content,
 		QuoteId:    comment.QuoteId,
 		Status:     comment.Status,
 		CreateTime: comment.CreateTime,
+	}
+
+	if comment.ContentType == constants.ContentTypeMarkdown {
+		content, _ := markdown.New().Run(comment.Content)
+		ret.Content = BuildHtmlContent(content)
+	} else if comment.ContentType == constants.ContentTypeHtml {
+		ret.Content = BuildHtmlContent(comment.Content)
+	} else {
+		ret.Content = html.EscapeString(comment.Content)
 	}
 
 	if buildQuote && comment.QuoteId > 0 {
 		quote := _buildComment(services.CommentService.Get(comment.QuoteId), false)
 		if quote != nil {
 			ret.Quote = quote
-			ret.QuoteContent = template.HTML(quote.User.Nickname+"：") + quote.Content
+			ret.QuoteContent = quote.User.Nickname + "：" + quote.Content
 		}
 	}
 	return ret
@@ -365,17 +435,17 @@ func BuildFavorite(favorite *model.Favorite) *model.FavoriteResponse {
 	rsp.EntityType = favorite.EntityType
 	rsp.CreateTime = favorite.CreateTime
 
-	if favorite.EntityType == model.EntityTypeArticle {
+	if favorite.EntityType == constants.EntityArticle {
 		article := services.ArticleService.Get(favorite.EntityId)
-		if article == nil || article.Status != model.ArticleStatusPublished {
+		if article == nil || article.Status != constants.StatusOk {
 			rsp.Deleted = true
 		} else {
 			rsp.Url = urls.ArticleUrl(article.Id)
 			rsp.User = BuildUserById(article.UserId)
 			rsp.Title = article.Title
-			if article.ContentType == model.ContentTypeMarkdown {
+			if article.ContentType == constants.ContentTypeMarkdown {
 				rsp.Content = common.GetMarkdownSummary(article.Content)
-			} else {
+			} else if article.ContentType == constants.ContentTypeHtml {
 				doc, err := goquery.NewDocumentFromReader(strings.NewReader(article.Content))
 				if err == nil {
 					text := doc.Text()
@@ -385,7 +455,7 @@ func BuildFavorite(favorite *model.Favorite) *model.FavoriteResponse {
 		}
 	} else {
 		topic := services.TopicService.Get(favorite.EntityId)
-		if topic == nil || topic.Status != model.TopicStatusOk {
+		if topic == nil || topic.Status != constants.StatusOk {
 			rsp.Deleted = true
 		} else {
 			rsp.Url = urls.TopicUrl(topic.Id)
@@ -414,19 +484,21 @@ func BuildMessage(message *model.Message) *model.MessageResponse {
 	}
 
 	detailUrl := ""
-	if message.Type == model.MsgTypeComment {
+	if message.Type == constants.MsgTypeComment {
 		entityType := gjson.Get(message.ExtraData, "entityType")
 		entityId := gjson.Get(message.ExtraData, "entityId")
-		if entityType.String() == model.EntityTypeArticle {
+		if entityType.String() == constants.EntityArticle {
 			detailUrl = urls.ArticleUrl(entityId.Int())
-		} else if entityType.String() == model.EntityTypeTopic {
+		} else if entityType.String() == constants.EntityTopic {
 			detailUrl = urls.TopicUrl(entityId.Int())
+		} else if entityType.String() == constants.EntityTweet {
+			detailUrl = urls.TweetUrl(entityId.Int())
 		}
 	}
 	from := BuildUserDefaultIfNull(message.FromId)
 	if message.FromId <= 0 {
 		from.Nickname = "系统通知"
-		from.Avatar = avatar.DefaultAvatars[0]
+		from.Avatar = avatar.DefaultAvatar
 	}
 	return &model.MessageResponse{
 		MessageId:    message.Id,
@@ -462,21 +534,20 @@ func BuildHtmlContent(htmlContent string) string {
 	doc.Find("a").Each(func(i int, selection *goquery.Selection) {
 		href := selection.AttrOr("href", "")
 
-		// // 标记站外链接，搜索引擎爬虫不传递权重值
-		// if !strings.Contains(href, "mlog.club") {
-		// 	selection.SetAttr("rel", "external nofollow")
-		// }
-
-		// 内部跳转
-		if len(href) > 0 && !urls.IsInternalUrl(href) {
-			newHref := simple.ParseUrl(urls.AbsUrl("/redirect")).AddQuery("url", href).BuildStr()
-			selection.SetAttr("href", newHref)
-			selection.SetAttr("target", "_blank")
+		if simple.IsBlank(href) {
+			return
 		}
 
-		// 如果是锚链接
-		if strings.Index(href, "#") == 0 {
-			selection.ReplaceWithHtml(selection.Text())
+		// 不是内部链接
+		if !urls.IsInternalUrl(href) {
+			selection.SetAttr("target", "_blank")
+			selection.SetAttr("rel", "external nofollow") // 标记站外链接，搜索引擎爬虫不传递权重值
+
+			_config := services.SysConfigService.GetConfig()
+			if _config.UrlRedirect { // 开启非内部链接跳转
+				newHref := simple.ParseUrl(urls.AbsUrl("/redirect")).AddQuery("url", href).BuildStr()
+				selection.SetAttr("href", newHref)
+			}
 		}
 
 		// 如果a标签没有title，那么设置title
@@ -489,15 +560,62 @@ func BuildHtmlContent(htmlContent string) string {
 	// 处理图片
 	doc.Find("img").Each(func(i int, selection *goquery.Selection) {
 		src := selection.AttrOr("src", "")
+		// 处理第三方图片
 		if strings.Contains(src, "qpic.cn") {
-			newSrc := simple.ParseUrl("/api/img/proxy").AddQuery("url", src).BuildStr()
-			selection.SetAttr("src", newSrc)
+			src = simple.ParseUrl("/api/img/proxy").AddQuery("url", src).BuildStr()
+			// selection.SetAttr("src", src)
 		}
+
+		// 处理图片样式
+		src = HandleOssImageStyleDetail(src)
+
+		// 处理lazyload
+		selection.SetAttr("data-src", src)
+		selection.RemoveAttr("src")
 	})
 
-	html, err := doc.Html()
-	if err != nil {
-		return htmlContent
+	if htmlStr, err := doc.Find("body").Html(); err == nil {
+		return htmlStr
 	}
-	return html
+	return htmlContent
+}
+
+func HandleOssImageStyleAvatar(url string) string {
+	if config.Instance.Uploader.Enable != "aliyunOss" {
+		return url
+	}
+	return HandleOssImageStyle(url, config.Instance.Uploader.AliyunOss.StyleAvatar)
+}
+
+func HandleOssImageStyleDetail(url string) string {
+	if config.Instance.Uploader.Enable != "aliyunOss" {
+		return url
+	}
+	return HandleOssImageStyle(url, config.Instance.Uploader.AliyunOss.StyleDetail)
+}
+
+func HandleOssImageStylePreview(url string) string {
+	if !simple.EqualsIgnoreCase(config.Instance.Uploader.Enable, "aliyunOss") {
+		return url
+	}
+	return HandleOssImageStyle(url, config.Instance.Uploader.AliyunOss.StylePreview)
+}
+
+func HandleOssImageStyle(url, style string) string {
+	if simple.IsBlank(style) || simple.IsBlank(url) {
+		return url
+	}
+	if !IsOssImageUrl(url) {
+		return url
+	}
+	sep := config.Instance.Uploader.AliyunOss.StyleSplitter
+	if simple.IsBlank(sep) {
+		return url
+	}
+	return strings.Join([]string{url, style}, sep)
+}
+
+func IsOssImageUrl(url string) bool {
+	host := simple.ParseUrl(config.Instance.Uploader.AliyunOss.Host).GetURL().Host
+	return strings.Contains(url, host)
 }

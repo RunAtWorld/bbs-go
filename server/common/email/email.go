@@ -1,15 +1,17 @@
 package email
 
 import (
+	"bbs-go/model"
 	"bytes"
+	"crypto/tls"
 	"html/template"
+	"net"
 	"net/smtp"
-	"time"
 
 	"github.com/jordan-wright/email"
 	"github.com/sirupsen/logrus"
 
-	"github.com/mlogclub/bbs-go/common/config"
+	"bbs-go/config"
 )
 
 var emailTemplate = `
@@ -31,57 +33,67 @@ var emailTemplate = `
         </div>
 		{{end}}
        
-		{{if .Url}}
+		{{if .link}}
         <p>
-            <a style="text-decoration:none; color:#12addb" href="{{.Url}}" target="_blank" rel="noopener">点击查看详情</a>
+            <a style="text-decoration:none; color:#12addb" href="{{.link.Url}}" target="_blank" rel="noopener">{{.link.Title}}</a>
         </p>
 		{{end}}
     </div>
 </div>
 `
 
-// 发送模版邮件
-func SendTemplateEmail(to, subject, title, content, quoteContent, url string) {
+// SendTemplateEmail 发送模版邮件
+func SendTemplateEmail(to, subject, title, content, quote string, link *model.ActionLink) error {
 	tpl, err := template.New("emailTemplate").Parse(emailTemplate)
 	if err != nil {
-		logrus.Error(err)
-		return
+		return err
 	}
 	var b bytes.Buffer
 	err = tpl.Execute(&b, map[string]interface{}{
 		"Title":        title,
 		"Content":      content,
-		"QuoteContent": quoteContent,
-		"Url":          url,
+		"QuoteContent": quote,
+		"link":         link,
 	})
 	if err != nil {
-		logrus.Error(err)
-		return
+		return err
 	}
 	html := b.String()
-	SendEmail(to, subject, html)
+	return SendEmail(to, subject, html)
 }
 
-// 发送邮件
-func SendEmail(to string, subject, html string) {
+// SendEmail 发送邮件
+func SendEmail(to string, subject, html string) error {
+	var (
+		host      = config.Instance.Smtp.Host
+		port      = config.Instance.Smtp.Port
+		username  = config.Instance.Smtp.Username
+		password  = config.Instance.Smtp.Password
+		ssl       = config.Instance.Smtp.SSL
+		addr      = net.JoinHostPort(host, port)
+		auth      = smtp.PlainAuth("", username, password, host)
+		tlsConfig = &tls.Config{
+			InsecureSkipVerify: true,
+			ServerName:         host,
+		}
+	)
+
 	e := email.NewEmail()
-	e.From = config.Conf.Smtp.Username
+	e.From = config.Instance.Smtp.Username
 	e.To = []string{to}
 	e.Subject = subject
 	e.HTML = []byte(html)
-	doSend(e)
-}
 
-// 执行发送
-func doSend(e *email.Email) {
-	addr := config.Conf.Smtp.Host + ":" + config.Conf.Smtp.Port
-	emailPool, err := email.NewPool(addr, 3, smtp.PlainAuth("", config.Conf.Smtp.Username, config.Conf.Smtp.Password,
-		config.Conf.Smtp.Host))
-	if err != nil {
-		logrus.Error(err)
+	if ssl {
+		if err := e.SendWithTLS(addr, auth, tlsConfig); err != nil {
+			logrus.Error("发送邮件异常", err)
+			return err
+		}
+	} else {
+		if err := e.Send(addr, auth); err != nil {
+			logrus.Error("发送邮件异常", err)
+			return err
+		}
 	}
-	err = emailPool.Send(e, 10*time.Second)
-	if err != nil {
-		logrus.Error(err)
-	}
+	return nil
 }

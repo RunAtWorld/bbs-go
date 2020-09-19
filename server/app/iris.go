@@ -9,20 +9,19 @@ import (
 
 	"github.com/go-resty/resty/v2"
 
-	"github.com/mlogclub/bbs-go/common/config"
-	"github.com/mlogclub/bbs-go/controllers/api"
-
 	"github.com/iris-contrib/middleware/cors"
-	"github.com/kataras/iris"
-	"github.com/kataras/iris/context"
-	"github.com/kataras/iris/middleware/logger"
-	"github.com/kataras/iris/middleware/recover"
-	"github.com/kataras/iris/mvc"
+	"github.com/kataras/iris/v12"
+	"github.com/kataras/iris/v12/middleware/logger"
+	"github.com/kataras/iris/v12/middleware/recover"
+	"github.com/kataras/iris/v12/mvc"
 	"github.com/mlogclub/simple"
 	"github.com/sirupsen/logrus"
 
-	"github.com/mlogclub/bbs-go/controllers/admin"
-	"github.com/mlogclub/bbs-go/middleware"
+	"bbs-go/config"
+	"bbs-go/controllers/api"
+
+	"bbs-go/controllers/admin"
+	"bbs-go/middleware"
 )
 
 func InitIris() {
@@ -39,7 +38,7 @@ func InitIris() {
 	}))
 	app.AllowMethods(iris.MethodOptions)
 
-	app.OnAnyErrorCode(func(ctx context.Context) {
+	app.OnAnyErrorCode(func(ctx iris.Context) {
 		path := ctx.Path()
 		var err error
 		if strings.Contains(path, "/api/admin/") {
@@ -50,44 +49,50 @@ func InitIris() {
 		}
 	})
 
+	app.Any("/", func(i iris.Context) {
+		_, _ = i.HTML("<h1>Powered by bbs-go</h1>")
+	})
+
 	// api
 	mvc.Configure(app.Party("/api"), func(m *mvc.Application) {
 		m.Party("/topic").Handle(new(api.TopicController))
+		m.Party("/tweet").Handle(new(api.TweetController))
 		m.Party("/article").Handle(new(api.ArticleController))
 		m.Party("/project").Handle(new(api.ProjectController))
 		m.Party("/login").Handle(new(api.LoginController))
 		m.Party("/user").Handle(new(api.UserController))
 		m.Party("/tag").Handle(new(api.TagController))
-		m.Party("/category").Handle(new(api.CategoryController))
 		m.Party("/comment").Handle(new(api.CommentController))
 		m.Party("/favorite").Handle(new(api.FavoriteController))
 		m.Party("/config").Handle(new(api.ConfigController))
 		m.Party("/upload").Handle(new(api.UploadController))
-		m.Party("/subject").Handle(new(api.SubjectController))
 		m.Party("/link").Handle(new(api.LinkController))
+		m.Party("/captcha").Handle(new(api.CaptchaController))
+		m.Party("/spider").Handle(new(api.SpiderController))
 	})
 
 	// admin
 	mvc.Configure(app.Party("/api/admin"), func(m *mvc.Application) {
 		m.Router.Use(middleware.AdminAuth)
+		m.Party("/common").Handle(new(admin.CommonController))
 		m.Party("/user").Handle(new(admin.UserController))
-		m.Party("/github-user").Handle(new(admin.GithubUserController))
-		m.Party("/category").Handle(new(admin.CategoryController))
+		m.Party("/third-account").Handle(new(admin.ThirdAccountController))
 		m.Party("/tag").Handle(new(admin.TagController))
 		m.Party("/article").Handle(new(admin.ArticleController))
 		m.Party("/comment").Handle(new(admin.CommentController))
 		m.Party("/favorite").Handle(new(admin.FavoriteController))
 		m.Party("/article-tag").Handle(new(admin.ArticleTagController))
 		m.Party("/topic").Handle(new(admin.TopicController))
+		m.Party("/tweet").Handle(new(admin.TweetController))
+		m.Party("/topic-node").Handle(new(admin.TopicNodeController))
 		m.Party("/sys-config").Handle(new(admin.SysConfigController))
-		m.Party("/subject").Handle(new(admin.SubjectController))
-		m.Party("/subject-content").Handle(new(admin.SubjectContentController))
 		m.Party("/link").Handle(new(admin.LinkController))
-		m.Party("/collect-rule").Handle(new(admin.CollectRuleController))
-		m.Party("/collect-article").Handle(new(admin.CollectArticleController))
+		m.Party("/user-score").Handle(new(admin.UserScoreController))
+		m.Party("/user-score-log").Handle(new(admin.UserScoreLogController))
+		m.Party("/operate-log").Handle(new(admin.OperateLogController))
 	})
 
-	app.Get("/api/img/proxy", func(i context.Context) {
+	app.Get("/api/img/proxy", func(i iris.Context) {
 		url := i.FormValue("url")
 		resp, err := resty.New().R().Get(url)
 		i.Header("Content-Type", "image/jpg")
@@ -98,7 +103,14 @@ func InitIris() {
 		}
 	})
 
-	server := &http.Server{Addr: ":" + config.Conf.Port}
+	// if uploader is set to local, then we should start a static file server
+	if config.Instance.Uploader.Enable == "local" {
+		fileServer := iris.FileServer(config.Instance.Uploader.Local.Path)
+		h := iris.StripPrefix("", fileServer)
+		app.Get("/images/{f:path}", h)
+	}
+
+	server := &http.Server{Addr: ":" + config.Instance.Port}
 	handleSignal(server)
 	err := app.Run(iris.Server(server), iris.WithConfiguration(iris.Configuration{
 		DisableStartupLog:                 false,

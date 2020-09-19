@@ -1,109 +1,116 @@
 <template>
   <section class="main">
-    <div class="container">
-      <div class="columns">
-        <div class="column is-9">
-          <div class="main-body">
-            <nav class="breadcrumb" aria-label="breadcrumbs" style="margin-bottom: 0px;">
+    <div class="container main-container left-main">
+      <div class="left-container">
+        <user-profile :user="currentUser" />
+        <div class="widget">
+          <div class="widget-header">
+            <nav class="breadcrumb">
               <ul>
                 <li>
                   <a href="/">首页</a>
                 </li>
                 <li>
-                  <a :href="'/user/' + currentUser.id">{{ currentUser.nickname }}</a>
+                  <a :href="'/user/' + currentUser.id">{{
+                    currentUser.nickname
+                  }}</a>
                 </li>
                 <li class="is-active">
                   <a href="#" aria-current="page">消息</a>
                 </li>
               </ul>
             </nav>
+          </div>
 
-            <ul class="message-list">
-              <li v-for="message in messages" :key="message.messageId" class="message-item">
+          <div class="widget-content">
+            <ul
+              v-if="messagesPage && messagesPage.results"
+              class="message-list"
+            >
+              <li
+                v-for="message in messagesPage.results"
+                :key="message.messageId"
+                class="message-item"
+              >
                 <div class="message-item-left">
-                  <div
-                    class="avatar is-rounded has-border"
-                    :style="{backgroundImage:'url(' + message.from.avatar + ')'}"
-                  />
+                  <img :src="message.from.smallAvatar" class="avatar" />
                 </div>
                 <div class="message-item-right">
                   <div class="message-item-meta">
                     <span v-if="message.from.id > 0" class="nickname">
-                      <a
-                        :href="'/user/' + message.from.id"
-                        target="_blank"
-                      >{{ message.from.nickname }}</a>
+                      <a :href="'/user/' + message.from.id" target="_blank">{{
+                        message.from.nickname
+                      }}</a>
                     </span>
                     <span v-else class="nickname">
-                      <a href="javascript:void(0)" target="_blank">{{ message.from.nickname }}</a>
+                      <a href="javascript:void(0)" target="_blank">{{
+                        message.from.nickname
+                      }}</a>
                     </span>
-                    <span class="time">{{ message.createTime | prettyDate }}</span>
+                    <span class="time">{{
+                      message.createTime | prettyDate
+                    }}</span>
                   </div>
                   <div class="content">
-                    {{ message.content }}
-                    <span v-if="message.detailUrl" class="show-more">
-                      <a :href="message.detailUrl" target="_blank">点击查看详情&gt;&gt;</a>
-                    </span>
-                    <blockquote>{{ message.quoteContent }}</blockquote>
+                    <div class="message-content">
+                      {{ message.content }}
+                      <a
+                        v-if="message.detailUrl"
+                        :href="message.detailUrl"
+                        class="show-more"
+                        target="_blank"
+                        >点击查看详情&gt;&gt;</a
+                      >
+                    </div>
+                    <blockquote class="message-quote">
+                      {{ message.quoteContent }}
+                    </blockquote>
                   </div>
                 </div>
               </li>
-              <li v-if="hasMore" class="more">
-                <a @click="list">查看更多&gt;&gt;</a>
-              </li>
             </ul>
-          </div>
-        </div>
-        <div class="column is-3">
-          <div class="main-aside">
-            <user-center-sidebar :user="currentUser" :current-user="currentUser" />
+            <div v-else class="notification is-primary">
+              暂无消息
+            </div>
+            <pagination
+              :page="messagesPage.page"
+              url-prefix="/user/messages?p="
+            />
           </div>
         </div>
       </div>
+      <user-center-sidebar :user="currentUser" />
     </div>
   </section>
 </template>
 
 <script>
+import UserProfile from '~/components/UserProfile'
 import UserCenterSidebar from '~/components/UserCenterSidebar'
+import Pagination from '~/components/Pagination'
 export default {
   middleware: 'authenticated',
-  components: {
-    UserCenterSidebar
+  components: { UserProfile, UserCenterSidebar, Pagination },
+  async asyncData({ $axios, query }) {
+    const [messagesPage] = await Promise.all([
+      $axios.get('/api/user/messages?page=' + (query.p || 1)),
+    ])
+    return {
+      messagesPage,
+    }
   },
   data() {
     return {
       messages: [],
       cursor: 0,
-      hasMore: true
+      hasMore: true,
     }
   },
-  async asyncData({ $axios, params }) {
-    const [currentUser] = await Promise.all([
-      $axios.get('/api/user/current')
-    ])
-    return {
-      currentUser: currentUser
-    }
+  computed: {
+    currentUser() {
+      return this.$store.state.user.current
+    },
   },
-  mounted() {
-    this.list()
-  },
-  methods: {
-    async list() {
-      const ret = await this.$axios.get('/api/user/messages', {
-        params: {
-          cursor: this.cursor
-        }
-      })
-      if (ret.results && ret.results.length) {
-        this.messages = this.messages.concat(ret.results)
-      } else {
-        this.hasMore = false
-      }
-      this.cursor = ret.cursor
-    }
-  }
 }
 </script>
 
@@ -149,28 +156,27 @@ export default {
       .content {
         margin-top: 5px;
         margin-bottom: 0px;
-        font-size: 14px;
-        color: #4a4a4a;
 
-        blockquote {
-          margin: 0px;
+        .message-content {
+          font-size: 15px;
+          font-weight: 400;
+          color: #000;
+
+          .show-more {
+            text-align: right;
+            margin-left: 5px;
+          }
         }
-      }
 
-      .show-more {
-        text-align: right;
-
-        a {
+        .message-quote {
+          margin: 8px 0;
+          padding: 8px;
           font-size: 13px;
+          font-weight: 400;
+          color: #4a4a4a;
         }
       }
     }
-  }
-
-  li.more {
-    text-align: center;
-    font-size: 15px;
-    margin-top: 10px;
   }
 }
 </style>

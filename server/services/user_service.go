@@ -1,20 +1,32 @@
 package services
 
 import (
-	"strings"
-
+	"bbs-go/common"
+	"bbs-go/common/email"
+	"bbs-go/common/urls"
+	"bbs-go/common/validate"
+	"bbs-go/model/constants"
+	"database/sql"
+	"errors"
 	"github.com/jinzhu/gorm"
-	"github.com/kataras/iris/core/errors"
 	"github.com/mlogclub/simple"
+	"github.com/sirupsen/logrus"
+	"github.com/tidwall/gjson"
+	"net/http"
+	"strconv"
+	"strings"
+	"time"
 
-	"github.com/mlogclub/bbs-go/services/cache"
-	"github.com/mlogclub/bbs-go/common"
-	"github.com/mlogclub/bbs-go/common/avatar"
-	"github.com/mlogclub/bbs-go/common/validate"
+	"bbs-go/cache"
+	"bbs-go/common/avatar"
+	"bbs-go/common/uploader"
 
-	"github.com/mlogclub/bbs-go/model"
-	"github.com/mlogclub/bbs-go/repositories"
+	"bbs-go/model"
+	"bbs-go/repositories"
 )
+
+// 邮箱验证邮件有效期（小时）
+const emailVerifyExpireHour = 24
 
 var UserService = newUserService()
 
@@ -25,63 +37,189 @@ func newUserService() *userService {
 type userService struct {
 }
 
-func (this *userService) Get(id int64) *model.User {
-	return repositories.UserRepository.Get(simple.GetDB(), id)
+func (s *userService) Get(id int64) *model.User {
+	return repositories.UserRepository.Get(simple.DB(), id)
 }
 
-func (this *userService) Take(where ...interface{}) *model.User {
-	return repositories.UserRepository.Take(simple.GetDB(), where...)
+func (s *userService) Take(where ...interface{}) *model.User {
+	return repositories.UserRepository.Take(simple.DB(), where...)
 }
 
-func (this *userService) QueryCnd(cnd *simple.QueryCnd) (list []model.User, err error) {
-	return repositories.UserRepository.QueryCnd(simple.GetDB(), cnd)
+func (s *userService) Find(cnd *simple.SqlCnd) []model.User {
+	return repositories.UserRepository.Find(simple.DB(), cnd)
 }
 
-func (this *userService) Query(queries *simple.ParamQueries) (list []model.User, paging *simple.Paging) {
-	return repositories.UserRepository.Query(simple.GetDB(), queries)
+func (s *userService) FindOne(cnd *simple.SqlCnd) *model.User {
+	return repositories.UserRepository.FindOne(simple.DB(), cnd)
 }
 
-func (this *userService) Create(t *model.User) error {
-	err := repositories.UserRepository.Create(simple.GetDB(), t);
+func (s *userService) FindPageByParams(params *simple.QueryParams) (list []model.User, paging *simple.Paging) {
+	return repositories.UserRepository.FindPageByParams(simple.DB(), params)
+}
+
+func (s *userService) FindPageByCnd(cnd *simple.SqlCnd) (list []model.User, paging *simple.Paging) {
+	return repositories.UserRepository.FindPageByCnd(simple.DB(), cnd)
+}
+
+func (s *userService) Create(t *model.User) error {
+	err := repositories.UserRepository.Create(simple.DB(), t)
 	if err == nil {
 		cache.UserCache.Invalidate(t.Id)
 	}
 	return nil
 }
 
-func (this *userService) Update(t *model.User) error {
-	err := repositories.UserRepository.Update(simple.GetDB(), t)
+func (s *userService) Update(t *model.User) error {
+	err := repositories.UserRepository.Update(simple.DB(), t)
 	cache.UserCache.Invalidate(t.Id)
 	return err
 }
 
-func (this *userService) Updates(id int64, columns map[string]interface{}) error {
-	err := repositories.UserRepository.Updates(simple.GetDB(), id, columns)
+func (s *userService) Updates(id int64, columns map[string]interface{}) error {
+	err := repositories.UserRepository.Updates(simple.DB(), id, columns)
 	cache.UserCache.Invalidate(id)
 	return err
 }
 
-func (this *userService) UpdateColumn(id int64, name string, value interface{}) error {
-	err := repositories.UserRepository.UpdateColumn(simple.GetDB(), id, name, value)
+func (s *userService) UpdateColumn(id int64, name string, value interface{}) error {
+	err := repositories.UserRepository.UpdateColumn(simple.DB(), id, name, value)
 	cache.UserCache.Invalidate(id)
 	return err
 }
 
-func (this *userService) Delete(id int64) {
-	repositories.UserRepository.Delete(simple.GetDB(), id)
+func (s *userService) Delete(id int64) {
+	repositories.UserRepository.Delete(simple.DB(), id)
 	cache.UserCache.Invalidate(id)
 }
 
-func (this *userService) GetByEmail(email string) *model.User {
-	return repositories.UserRepository.GetByEmail(simple.GetDB(), email)
+// Scan 扫描
+func (s *userService) Scan(callback func(users []model.User)) {
+	var cursor int64
+	for {
+		list := repositories.UserRepository.Find(simple.DB(), simple.NewSqlCnd().Where("id > ?", cursor).Asc("id").Limit(100))
+		if list == nil || len(list) == 0 {
+			break
+		}
+		cursor = list[len(list)-1].Id
+		callback(list)
+	}
 }
 
-func (this *userService) GetByUsername(username string) *model.User {
-	return repositories.UserRepository.GetByUsername(simple.GetDB(), username)
+// Forbidden 禁言
+func (s *userService) Forbidden(operatorId, userId int64, days int, reason string, r *http.Request) error {
+	var forbiddenEndTime int64
+	if days == -1 { // 永久禁言
+		forbiddenEndTime = -1
+	} else if days > 0 {
+		forbiddenEndTime = simple.Timestamp(time.Now().Add(time.Hour * 24 * time.Duration(days)))
+	} else {
+		return errors.New("禁言时间错误")
+	}
+	if repositories.UserRepository.UpdateColumn(simple.DB(), userId, "forbidden_end_time", forbiddenEndTime) == nil {
+		description := ""
+		if simple.IsNotBlank(reason) {
+			description = "禁言原因：" + reason
+		}
+		OperateLogService.AddOperateLog(operatorId, constants.OpTypeForbidden, constants.EntityUser, userId,
+			description, r)
+	}
+	return nil
 }
 
-// 登录
-func (this *userService) SignIn(username, password string) (*model.User, error) {
+// RemoveForbidden 移除禁言
+func (s *userService) RemoveForbidden(operatorId, userId int64, r *http.Request) {
+	user := s.Get(userId)
+	if user == nil || !user.IsForbidden() {
+		return
+	}
+	if repositories.UserRepository.UpdateColumn(simple.DB(), userId, "forbidden_end_time", 0) == nil {
+		OperateLogService.AddOperateLog(operatorId, constants.OpTypeRemoveForbidden, constants.EntityUser, userId, "", r)
+	}
+}
+
+// GetByEmail 根据邮箱查找
+func (s *userService) GetByEmail(email string) *model.User {
+	return repositories.UserRepository.GetByEmail(simple.DB(), email)
+}
+
+// GetByUsername 根据用户名查找
+func (s *userService) GetByUsername(username string) *model.User {
+	return repositories.UserRepository.GetByUsername(simple.DB(), username)
+}
+
+// SignUp 注册
+func (s *userService) SignUp(username, email, nickname, password, rePassword string) (*model.User, error) {
+	username = strings.TrimSpace(username)
+	email = strings.TrimSpace(email)
+	nickname = strings.TrimSpace(nickname)
+
+	// 验证昵称
+	if len(nickname) == 0 {
+		return nil, errors.New("昵称不能为空")
+	}
+
+	// 验证密码
+	err := validate.IsPassword(password, rePassword)
+	if err != nil {
+		return nil, err
+	}
+
+	// 验证邮箱
+	if len(email) > 0 {
+		if err := validate.IsEmail(email); err != nil {
+			return nil, err
+		}
+		if s.GetByEmail(email) != nil {
+			return nil, errors.New("邮箱：" + email + " 已被占用")
+		}
+	} else {
+		return nil, errors.New("请输入邮箱")
+	}
+
+	// 验证用户名
+	if len(username) > 0 {
+		if err := validate.IsUsername(username); err != nil {
+			return nil, err
+		}
+		if s.isUsernameExists(username) {
+			return nil, errors.New("用户名：" + username + " 已被占用")
+		}
+	}
+
+	user := &model.User{
+		Username:   simple.SqlNullString(username),
+		Email:      simple.SqlNullString(email),
+		Nickname:   nickname,
+		Password:   simple.EncodePassword(password),
+		Status:     constants.StatusOk,
+		CreateTime: simple.NowTimestamp(),
+		UpdateTime: simple.NowTimestamp(),
+	}
+
+	err = simple.Tx(simple.DB(), func(tx *gorm.DB) error {
+		if err := repositories.UserRepository.Create(tx, user); err != nil {
+			return err
+		}
+
+		avatarUrl, err := s.HandleAvatar(user.Id, "")
+		if err != nil {
+			return err
+		}
+
+		if err := repositories.UserRepository.UpdateColumn(tx, user.Id, "avatar", avatarUrl); err != nil {
+			return err
+		}
+		return nil
+	})
+
+	if err != nil {
+		return nil, err
+	}
+	return user, nil
+}
+
+// SignIn 登录
+func (s *userService) SignIn(username, password string) (*model.User, error) {
 	if len(username) == 0 {
 		return nil, errors.New("用户名/邮箱不能为空")
 	}
@@ -89,13 +227,13 @@ func (this *userService) SignIn(username, password string) (*model.User, error) 
 		return nil, errors.New("密码不能为空")
 	}
 	var user *model.User = nil
-	if validate.IsEmail(username) { // 如果用户输入的是邮箱
-		user = this.GetByEmail(username)
+	if err := validate.IsEmail(username); err == nil { // 如果用户输入的是邮箱
+		user = s.GetByEmail(username)
 	} else {
-		user = this.GetByUsername(username)
+		user = s.GetByUsername(username)
 	}
-	if user == nil {
-		return nil, errors.New("用户不存在")
+	if user == nil || user.Status != constants.StatusOk {
+		return nil, errors.New("用户不存在或被禁用")
 	}
 	if !simple.ValidatePassword(user.Password, password) {
 		return nil, errors.New("密码错误")
@@ -103,137 +241,52 @@ func (this *userService) SignIn(username, password string) (*model.User, error) 
 	return user, nil
 }
 
-// 注册
-func (this *userService) SignUp(username, email, password, rePassword, nickname, avatar string) (*model.User, error) {
-	username = strings.TrimSpace(username)
-	email = strings.TrimSpace(email)
-
-	if !common.IsValidateUsername(username) {
-		return nil, errors.New("用户名必须由5-12位(数字、字母、_、-)组成，且必须以字母开头。")
-	}
-	if !validate.IsEmail(email) {
-		return nil, errors.New("请输入合法的邮箱")
-	}
-	if len(password) == 0 {
-		return nil, errors.New("请输入密码")
-	}
-	if simple.RuneLen(password) < 6 {
-		return nil, errors.New("密码过于简单")
-	}
-	if len(nickname) == 0 {
-		return nil, errors.New("昵称不能为空")
-	}
-	if password != rePassword {
-		return nil, errors.New("两次输入密码不匹配")
-	}
-
-	if this.GetByUsername(username) != nil {
-		return nil, errors.New("用户名：" + username + " 已被占用")
-	}
-
-	if this.GetByEmail(email) != nil {
-		return nil, errors.New("邮箱：" + email + " 已被占用")
-	}
-
-	password = simple.EncodePassword(password)
-
-	user := &model.User{
-		Username:   username,
-		Email:      email,
-		Nickname:   nickname,
-		Password:   password,
-		Avatar:     avatar,
-		Status:     model.UserStatusOk,
-		CreateTime: simple.NowTimestamp(),
-		UpdateTime: simple.NowTimestamp(),
-	}
-
-	err := this.Create(user)
-	if err != nil {
-		return nil, err
-	}
-
-	cache.UserCache.Invalidate(user.Id)
-	return user, nil
-}
-
-// 绑定账号
-func (this *userService) Bind(githubId int64, bindType, username, email, password, rePassword, nickname string) (user *model.User, err error) {
-	githubUser := repositories.GithubUserRepository.Get(simple.GetDB(), githubId)
-	if githubUser == nil {
-		err = errors.New("Github账号未找到")
-		return
-	}
-	if githubUser.UserId > 0 {
-		err = errors.New("Github账号已绑定了用户")
-		return
-	}
-
-	if bindType == "login" { // 登录绑定
-		user, err = this.SignIn(username, password)
-		if err != nil {
-			return
-		} else if avatar.IsDefaultAvatar(user.Avatar) { // 如果是默认头像，那么更新一下头像
-			_ = this.UpdateColumn(user.Id, "avatar", githubUser.AvatarUrl)
-		}
-	} else { // 注册绑定
-		if !common.IsValidateUsername(username) {
-			err = errors.New("用户名必须由5-12位(数字、字母、_、-)组成，且必须以字母开头。")
-			return
-		}
-		user, err = this.SignUp(username, email, password, rePassword, nickname, githubUser.AvatarUrl)
-		if err != nil {
-			return
-		}
-	}
-
-	if user == nil {
-		err = errors.New("未知异常")
-		return
-	}
-
-	// 执行绑定
-	githubUser.UserId = user.Id
-	githubUser.UpdateTime = simple.NowTimestamp()
-	err = repositories.GithubUserRepository.Update(simple.GetDB(), githubUser)
-	return
-}
-
-// Github账号登录
-func (this *userService) SignInByGithub(githubUser *model.GithubUser) (*model.User, *simple.CodeError) {
-	user := this.Get(githubUser.UserId)
+// SignInByThirdAccount 第三方账号登录
+func (s *userService) SignInByThirdAccount(thirdAccount *model.ThirdAccount) (*model.User, *simple.CodeError) {
+	user := s.Get(thirdAccount.UserId.Int64)
 	if user != nil {
+		if user.Status != constants.StatusOk {
+			return nil, simple.NewErrorMsg("用户已被禁用")
+		}
 		return user, nil
 	}
 
-	if this.isUsernameExists(githubUser.Login) {
-		return nil, simple.NewErrorData(model.ErrorCodeUserNameExists, "用户名["+githubUser.Login+"]已存在", githubUser)
+	var homePage string
+	var description string
+	if thirdAccount.ThirdType == constants.ThirdAccountTypeGithub {
+		if blog := gjson.Get(thirdAccount.ExtraData, "blog"); blog.Exists() && len(blog.String()) > 0 {
+			homePage = blog.String()
+		} else if htmlUrl := gjson.Get(thirdAccount.ExtraData, "html_url"); htmlUrl.Exists() && len(htmlUrl.String()) > 0 {
+			homePage = htmlUrl.String()
+		}
+
+		description = gjson.Get(thirdAccount.ExtraData, "bio").String()
 	}
 
-	if this.isEmailExists(githubUser.Email) {
-		return nil, simple.NewErrorData(model.ErrorCodeEmailExists, "邮箱["+githubUser.Email+"]已经存在", githubUser)
-	}
-
-	nickname := strings.TrimSpace(githubUser.Name)
-	if len(nickname) == 0 {
-		nickname = githubUser.Login
-	}
 	user = &model.User{
-		Username:   githubUser.Login,
-		Email:      githubUser.Email,
-		Nickname:   nickname,
-		Avatar:     githubUser.AvatarUrl,
-		Status:     model.UserStatusOk,
-		CreateTime: simple.NowTimestamp(),
-		UpdateTime: simple.NowTimestamp(),
+		Username:    sql.NullString{},
+		Nickname:    thirdAccount.Nickname,
+		Status:      constants.StatusOk,
+		HomePage:    homePage,
+		Description: description,
+		CreateTime:  simple.NowTimestamp(),
+		UpdateTime:  simple.NowTimestamp(),
 	}
-	err := simple.Tx(simple.GetDB(), func(tx *gorm.DB) error {
-		err := repositories.UserRepository.Create(tx, user)
+	err := simple.Tx(simple.DB(), func(tx *gorm.DB) error {
+		if err := repositories.UserRepository.Create(tx, user); err != nil {
+			return err
+		}
+
+		if err := repositories.ThirdAccountRepository.UpdateColumn(tx, thirdAccount.Id, "user_id", user.Id); err != nil {
+			return err
+		}
+
+		avatarUrl, err := s.HandleAvatar(user.Id, thirdAccount.Avatar)
 		if err != nil {
 			return err
 		}
-		err = repositories.GithubUserRepository.UpdateColumn(tx, githubUser.Id, "user_id", user.Id)
-		if err != nil {
+
+		if err := repositories.UserRepository.UpdateColumn(tx, user.Id, "avatar", avatarUrl); err != nil {
 			return err
 		}
 		return nil
@@ -245,15 +298,219 @@ func (this *userService) SignInByGithub(githubUser *model.GithubUser) (*model.Us
 	return user, nil
 }
 
-// 邮箱是否存在
-func (this *userService) isEmailExists(email string) bool {
+// HandleAvatar 处理头像，优先级如下：1. 如果第三方登录带有来头像；2. 生成随机默认头像
+// thirdAvatar: 第三方登录带过来的头像
+func (s *userService) HandleAvatar(userId int64, thirdAvatar string) (string, error) {
+	if len(thirdAvatar) > 0 {
+		return uploader.CopyImage(thirdAvatar)
+	}
+
+	avatarBytes, err := avatar.Generate(userId)
+	if err != nil {
+		return "", err
+	}
+	return uploader.PutImage(avatarBytes)
+}
+
+// isEmailExists 邮箱是否存在
+func (s *userService) isEmailExists(email string) bool {
 	if len(email) == 0 { // 如果邮箱为空，那么就认为是不存在
 		return false
 	}
-	return this.GetByEmail(email) != nil
+	return s.GetByEmail(email) != nil
 }
 
-// 用户名是否存在
-func (this *userService) isUsernameExists(username string) bool {
-	return this.GetByUsername(username) != nil
+// isUsernameExists 用户名是否存在
+func (s *userService) isUsernameExists(username string) bool {
+	return s.GetByUsername(username) != nil
+}
+
+// SetAvatar 更新头像
+func (s *userService) UpdateAvatar(userId int64, avatar string) error {
+	return s.UpdateColumn(userId, "avatar", avatar)
+}
+
+// SetUsername 设置用户名
+func (s *userService) SetUsername(userId int64, username string) error {
+	username = strings.TrimSpace(username)
+	if err := validate.IsUsername(username); err != nil {
+		return err
+	}
+
+	user := s.Get(userId)
+	if len(user.Username.String) > 0 {
+		return errors.New("你已设置了用户名，无法重复设置。")
+	}
+	if s.isUsernameExists(username) {
+		return errors.New("用户名：" + username + " 已被占用")
+	}
+	return s.UpdateColumn(userId, "username", username)
+}
+
+// SetEmail 设置密码
+func (s *userService) SetEmail(userId int64, email string) error {
+	email = strings.TrimSpace(email)
+	if err := validate.IsEmail(email); err != nil {
+		return err
+	}
+	if s.isEmailExists(email) {
+		return errors.New("邮箱：" + email + " 已被占用")
+	}
+	return s.UpdateColumn(userId, "email", email)
+}
+
+// SetPassword 设置密码
+func (s *userService) SetPassword(userId int64, password, rePassword string) error {
+	if err := validate.IsPassword(password, rePassword); err != nil {
+		return err
+	}
+	user := s.Get(userId)
+	if len(user.Password) > 0 {
+		return errors.New("你已设置了密码，如需修改请前往修改页面。")
+	}
+	password = simple.EncodePassword(password)
+	return s.UpdateColumn(userId, "password", password)
+}
+
+// UpdatePassword 修改密码
+func (s *userService) UpdatePassword(userId int64, oldPassword, password, rePassword string) error {
+	if err := validate.IsPassword(password, rePassword); err != nil {
+		return err
+	}
+	user := s.Get(userId)
+
+	if len(user.Password) == 0 {
+		return errors.New("你没设置密码，请先设置密码")
+	}
+
+	if !simple.ValidatePassword(user.Password, oldPassword) {
+		return errors.New("旧密码验证失败")
+	}
+
+	return s.UpdateColumn(userId, "password", simple.EncodePassword(password))
+}
+
+// IncrTopicCount topic_count + 1
+func (s *userService) IncrTopicCount(userId int64) int {
+	t := repositories.UserRepository.Get(simple.DB(), userId)
+	if t == nil {
+		return 0
+	}
+	topicCount := t.TopicCount + 1
+	if err := repositories.UserRepository.UpdateColumn(simple.DB(), userId, "topic_count", topicCount); err != nil {
+		logrus.Error(err)
+	} else {
+		cache.UserCache.Invalidate(userId)
+	}
+	return topicCount
+}
+
+// IncrCommentCount comment_count + 1
+func (s *userService) IncrCommentCount(userId int64) int {
+	t := repositories.UserRepository.Get(simple.DB(), userId)
+	if t == nil {
+		return 0
+	}
+	commentCount := t.CommentCount + 1
+	if err := repositories.UserRepository.UpdateColumn(simple.DB(), userId, "comment_count", commentCount); err != nil {
+		logrus.Error(err)
+	} else {
+		cache.UserCache.Invalidate(userId)
+	}
+	return commentCount
+}
+
+// SyncUserCount 同步用户计数
+func (s *userService) SyncUserCount() {
+	s.Scan(func(users []model.User) {
+		for _, user := range users {
+			topicCount := repositories.TopicRepository.Count(simple.DB(), simple.NewSqlCnd().Eq("user_id", user.Id).Eq("status", constants.StatusOk))
+			commentCount := repositories.CommentRepository.Count(simple.DB(), simple.NewSqlCnd().Eq("user_id", user.Id).Eq("status", constants.StatusOk))
+			_ = repositories.UserRepository.UpdateColumn(simple.DB(), user.Id, "topic_count", topicCount)
+			_ = repositories.UserRepository.UpdateColumn(simple.DB(), user.Id, "comment_count", commentCount)
+			cache.UserCache.Invalidate(user.Id)
+		}
+	})
+}
+
+// SendEmailVerifyEmail 发送邮箱验证邮件
+func (s *userService) SendEmailVerifyEmail(userId int64) error {
+	user := s.Get(userId)
+	if user == nil {
+		return errors.New("用户不存在")
+	}
+	if user.EmailVerified {
+		return errors.New("用户邮箱已验证")
+	}
+	if err := validate.IsEmail(user.Email.String); err != nil {
+		return err
+	}
+	var (
+		token     = simple.UUID()
+		url       = urls.AbsUrl("/user/email/verify?token=" + token)
+		link      = &model.ActionLink{Title: "点击这里验证邮箱>>", Url: url}
+		siteTitle = cache.SysConfigCache.GetValue(constants.SysConfigSiteTitle)
+		subject   = "邮箱验证 - " + siteTitle
+		title     = "邮箱验证 - " + siteTitle
+		content   = "该邮件用于验证你在 " + siteTitle + " 中设置邮箱的正确性，请在" + strconv.Itoa(emailVerifyExpireHour) + "小时内完成验证。验证链接：" + url
+	)
+	return simple.Tx(simple.DB(), func(tx *gorm.DB) error {
+		if err := repositories.EmailCodeRepository.Create(tx, &model.EmailCode{
+			Model:      model.Model{},
+			UserId:     userId,
+			Email:      user.Email.String,
+			Code:       "",
+			Token:      token,
+			Title:      title,
+			Content:    content,
+			Used:       false,
+			CreateTime: simple.NowTimestamp(),
+		}); err != nil {
+			return nil
+		}
+		if err := email.SendTemplateEmail(user.Email.String, subject, title, content, "", link); err != nil {
+			return err
+		}
+		return nil
+	})
+}
+
+// VerifyEmail 验证邮箱
+func (s *userService) VerifyEmail(userId int64, token string) error {
+	emailCode := EmailCodeService.FindOne(simple.NewSqlCnd().Eq("token", token))
+	if emailCode == nil || emailCode.Used {
+		return errors.New("非法请求")
+	}
+	if emailCode.UserId != userId {
+		return errors.New("非法验证码")
+	}
+
+	if simple.TimeFromTimestamp(emailCode.CreateTime).Add(time.Hour * time.Duration(emailVerifyExpireHour)).Before(time.Now()) {
+		return errors.New("验证邮件已过期")
+	}
+	return simple.Tx(simple.DB(), func(tx *gorm.DB) error {
+		if err := repositories.UserRepository.UpdateColumn(tx, emailCode.UserId, "email_verified", true); err != nil {
+			return err
+		}
+		cache.UserCache.Invalidate(emailCode.UserId)
+		return repositories.EmailCodeRepository.UpdateColumn(tx, emailCode.Id, "used", true)
+	})
+}
+
+// CheckPostStatus 用于在发表内容时检查用户状态
+func (s *userService) CheckPostStatus(user *model.User) *simple.CodeError {
+	if user == nil {
+		return simple.ErrorNotLogin
+	}
+	if user.Status != constants.StatusOk {
+		return common.UserDisabled
+	}
+	if user.IsForbidden() {
+		return common.ForbiddenError
+	}
+	observeSeconds := SysConfigService.GetInt(constants.SysConfigUserObserveSeconds)
+	if user.InObservationPeriod(observeSeconds) {
+		return simple.NewError(common.InObservationPeriod.Code, "账号尚在观察期，观察期时长："+strconv.Itoa(observeSeconds)+"秒，请稍后再试")
+	}
+	return nil
 }

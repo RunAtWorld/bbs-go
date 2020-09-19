@@ -1,37 +1,40 @@
-export default async function (context) {
-  const signInUrl = getSignInUrl(context)
-  const userToken = getUserToken(context)
-  if (!userToken) {
-    context.redirect(signInUrl)
-  } else {
-    const user = await checkLogin(context)
-    if (!user) {
-      context.redirect(signInUrl)
+import UserHelper from '~/common/UserHelper'
+
+export default function (context) {
+  const user = context.store.state.user.current
+  if (!user) {
+    toSignIn(context)
+    return
+  }
+  if (isAdminUrl(context)) {
+    if (!UserHelper.isOwner(user) && !UserHelper.isAdmin(user)) {
+      context.error({
+        statusCode: 403,
+        message: '403 forbidden',
+      })
     }
   }
 }
 
-// 检查登录
-async function checkLogin(context) {
-  try {
-    return await context.$axios.get('/api/user/current')
-  } catch (e) {
-    console.error(e)
-    return null
-  }
+// 当前访问URL是否是管理后台
+function isAdminUrl(context) {
+  return context.route.path.indexOf('/admin') === 0
 }
 
-// 获取UserToken
-function getUserToken(context) {
-  return context.app.$cookies.get('userToken')
+// 前往登录地址
+function toSignIn(context) {
+  const signInUrl = getSignInUrl(context)
+  context.redirect(signInUrl)
 }
 
 // 获取登录跳转地址
 function getSignInUrl(context) {
   let ref // 来源地址
-  if (process.server) { // 服务端
+  if (process.server) {
+    // 服务端
     ref = context.req.originalUrl
-  } else if (process.client) { // 客户端
+  } else if (process.client) {
+    // 客户端
     ref = context.route.path
   }
   let signinUrl = '/user/signin'

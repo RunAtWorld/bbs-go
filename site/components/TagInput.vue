@@ -1,21 +1,27 @@
 <template>
   <div class="select-tags">
-    <input id="tags" v-model="tags" name="tags" type="hidden">
+    <input id="tags" v-model="tags" name="tags" type="hidden" />
     <div class="tags-selected">
       <span v-for="tag in tags" :key="tag" class="tag-item">
-        <span class="text">{{ tag }}<i
-          class="iconfont icon-close"
-          :data-name="tag"
-          @click="clickRemoveTag"
+        <span class="text"
+          >{{ tag
+          }}<i
+            :data-name="tag"
+            class="iconfont icon-close"
+            @click="clickRemoveTag"
         /></span>
       </span>
     </div>
     <input
       ref="tagInput"
       v-model="inputTag"
+      :placeholder="
+        '标签（请用逗号分隔每个标签，最多' +
+        maxTagCount +
+        '个，每个最长15字符）'
+      "
       class="input"
       type="text"
-      :placeholder="'标签（请用逗号分隔每个标签，最多' + maxTagCount + '个，每个最长15字符）'"
       @input="autocomplete"
       @keydown.delete="removeTag"
       @keydown.enter="addTag"
@@ -26,16 +32,17 @@
       @keydown.40="selectDown"
       @keydown.esc="close"
       @focus="openRecommendTags"
+      @blur="closeRecommendTags"
       @click="openRecommendTags"
-    >
+    />
     <div v-if="autocompleteTags.length > 0" class="autocomplete-tags">
       <div class="tags-container">
         <section class="tag-section">
           <div
             v-for="(item, index) in autocompleteTags"
             :key="item"
+            :class="{ active: index === selectIndex }"
             class="tag-item"
-            :class="{active: index === selectIndex}"
             @click="selectTag(index)"
             v-text="item"
           />
@@ -46,9 +53,17 @@
       <div class="tags-container">
         <div class="header">
           <span>推荐标签</span>
-          <span class="close-recommend"><i class="iconfont icon-close" @click="closeRecommendTags" /></span>
+          <span class="close-recommend"
+            ><i class="iconfont icon-close" @click="closeRecommendTags"
+          /></span>
         </div>
-        <a v-for="tag in recommendTags" :key="tag" class="tag-item" @click="addRecommendTag(tag)" v-text="tag" />
+        <a
+          v-for="tag in recommendTags"
+          :key="tag"
+          class="tag-item"
+          @click="addRecommendTag(tag)"
+          v-text="tag"
+        />
       </div>
     </div>
   </div>
@@ -59,30 +74,33 @@ export default {
   props: {
     value: {
       type: Array,
-      default: function () {
+      default() {
         return []
-      }
-    }
+      },
+    },
   },
   data() {
     return {
       tags: this.value || [],
-      maxTagCount: 5, // 最多可以选择的标签数量
+      maxTagCount: 3, // 最多可以选择的标签数量
       maxWordCount: 15, // 每个标签最大字数
       showRecommendTags: false, // 是否显示推荐
-      recommendTags: [], // 推荐标签
       inputTag: '',
       autocompleteTags: [],
-      selectIndex: -1
+      selectIndex: -1,
     }
   },
-  mounted() {
-    this.getRecommendTags()
+  computed: {
+    // 推荐标签
+    recommendTags() {
+      return this.$store.state.config.config.recommendTags
+    },
   },
   methods: {
     removeTag(event, tag) {
       const selectionStart = this.$refs.tagInput.selectionStart
-      if (!this.inputTag || selectionStart === 0) { // input框没内容，或者光标在首位的时候就删除最后一个标签
+      if (!this.inputTag || selectionStart === 0) {
+        // input框没内容，或者光标在首位的时候就删除最后一个标签
         this.tags.splice(this.tags.length - 1, 1)
         this.$emit('input', this.tags)
       }
@@ -100,25 +118,28 @@ export default {
     },
 
     /**
-       * 手动点击选择标签
-       * @param index
-       */
+     * 手动点击选择标签
+     * @param index
+     */
     selectTag(index) {
       this.selectIndex = index
       this.addTag()
     },
 
     /**
-       * 添加标签
-       * @param event
-       */
+     * 添加标签
+     * @param event
+     */
     addTag(event) {
       if (event) {
         event.stopPropagation()
         event.preventDefault()
       }
 
-      if (this.selectIndex >= 0 && this.autocompleteTags.length > this.selectIndex) {
+      if (
+        this.selectIndex >= 0 &&
+        this.autocompleteTags.length > this.selectIndex
+      ) {
         this.addTagName(this.autocompleteTags[this.selectIndex])
       } else {
         this.addTagName(this.inputTag)
@@ -128,19 +149,19 @@ export default {
     },
 
     /**
-       * 添加推荐标签
-       * @param tagName
-       */
+     * 添加推荐标签
+     * @param tagName
+     */
     addRecommendTag(tagName) {
       this.addTagName(tagName)
       this.closeRecommendTags()
     },
 
     /**
-       * 添加标签
-       * @param tagName 标签名称
-       * @returns {boolean} 是否成功
-       */
+     * 添加标签
+     * @param tagName 标签名称
+     * @returns {boolean} 是否成功
+     */
     addTagName(tagName) {
       if (!tagName) {
         return false
@@ -157,7 +178,7 @@ export default {
       }
 
       // 标签已经存在
-      if (this.tags && this.tags.indexOf(tagName) !== -1) {
+      if (this.tags && this.tags.includes(tagName)) {
         return false
       }
 
@@ -174,7 +195,7 @@ export default {
         this.autocompleteTags = []
       } else {
         const ret = await this.$axios.post('/api/tag/autocomplete', {
-          input: this.inputTag
+          input: this.inputTag,
         })
         this.autocompleteTags = []
         if (ret.length > 0) {
@@ -216,15 +237,9 @@ export default {
 
     // 开启推荐
     closeRecommendTags() {
-      this.showRecommendTags = false
-    },
-
-    // 加载推荐标签
-    async getRecommendTags() {
-      const data = await this.$axios.get('/api/tag/recommendtags')
-      if (data && data.length) {
-        this.recommendTags = data
-      }
+      setTimeout(() => {
+        this.showRecommendTags = false
+      }, 300)
     },
 
     // 关闭自动补全
@@ -234,10 +249,9 @@ export default {
         this.selectIndex = -1
       }
       this.closeRecommendTags()
-    }
-  }
+    },
+  },
 }
-
 </script>
 
 <style lang="scss" scoped>
@@ -270,7 +284,7 @@ export default {
         text-align: center;
         vertical-align: middle;
         font-size: 12px;
-        color: rgba(0, 0, 0, .38);
+        color: rgba(0, 0, 0, 0.38);
         white-space: nowrap;
         display: inline-block;
 
@@ -311,7 +325,8 @@ export default {
           padding: 8px 15px;
           cursor: pointer;
 
-          &.active, &:hover {
+          &.active,
+          &:hover {
             color: #fff;
             background: #006bde;
           }
@@ -340,7 +355,7 @@ export default {
       .header {
         font-weight: bold;
         font-size: 15px;
-        color: #017E66;
+        color: #017e66;
         border-bottom: 1px solid #dbdbdb;
         margin-bottom: 5px;
         padding-top: 5px;
@@ -359,7 +374,7 @@ export default {
         padding: 0 11px;
         border-radius: 11px;
         display: inline-block;
-        color: #017E66;
+        color: #017e66;
         background-color: rgba(1, 126, 102, 0.08);
         height: 22px;
         line-height: 22px;

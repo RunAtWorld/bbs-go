@@ -1,12 +1,14 @@
 package services
 
 import (
+	"bbs-go/model/constants"
 	"errors"
-	"github.com/mlogclub/simple"
 	"strings"
 
-	"github.com/mlogclub/bbs-go/model"
-	"github.com/mlogclub/bbs-go/repositories"
+	"github.com/mlogclub/simple"
+
+	"bbs-go/model"
+	"bbs-go/repositories"
 )
 
 var CommentService = newCommentService()
@@ -18,85 +20,113 @@ func newCommentService() *commentService {
 type commentService struct {
 }
 
-func (this *commentService) Get(id int64) *model.Comment {
-	return repositories.CommentRepository.Get(simple.GetDB(), id)
+func (s *commentService) Get(id int64) *model.Comment {
+	return repositories.CommentRepository.Get(simple.DB(), id)
 }
 
-func (this *commentService) Take(where ...interface{}) *model.Comment {
-	return repositories.CommentRepository.Take(simple.GetDB(), where...)
+func (s *commentService) Take(where ...interface{}) *model.Comment {
+	return repositories.CommentRepository.Take(simple.DB(), where...)
 }
 
-func (this *commentService) QueryCnd(cnd *simple.QueryCnd) (list []model.Comment, err error) {
-	return repositories.CommentRepository.QueryCnd(simple.GetDB(), cnd)
+func (s *commentService) Find(cnd *simple.SqlCnd) []model.Comment {
+	return repositories.CommentRepository.Find(simple.DB(), cnd)
 }
 
-func (this *commentService) Query(queries *simple.ParamQueries) (list []model.Comment, paging *simple.Paging) {
-	return repositories.CommentRepository.Query(simple.GetDB(), queries)
+func (s *commentService) FindOne(cnd *simple.SqlCnd) *model.Comment {
+	return repositories.CommentRepository.FindOne(simple.DB(), cnd)
 }
 
-func (this *commentService) Create(t *model.Comment) error {
-	return repositories.CommentRepository.Create(simple.GetDB(), t)
+func (s *commentService) FindPageByParams(params *simple.QueryParams) (list []model.Comment, paging *simple.Paging) {
+	return repositories.CommentRepository.FindPageByParams(simple.DB(), params)
 }
 
-func (this *commentService) Update(t *model.Comment) error {
-	return repositories.CommentRepository.Update(simple.GetDB(), t)
+func (s *commentService) FindPageByCnd(cnd *simple.SqlCnd) (list []model.Comment, paging *simple.Paging) {
+	return repositories.CommentRepository.FindPageByCnd(simple.DB(), cnd)
 }
 
-func (this *commentService) Updates(id int64, columns map[string]interface{}) error {
-	return repositories.CommentRepository.Updates(simple.GetDB(), id, columns)
+func (s *commentService) Count(cnd *simple.SqlCnd) int {
+	return repositories.CommentRepository.Count(simple.DB(), cnd)
 }
 
-func (this *commentService) UpdateColumn(id int64, name string, value interface{}) error {
-	return repositories.CommentRepository.UpdateColumn(simple.GetDB(), id, name, value)
+func (s *commentService) Create(t *model.Comment) error {
+	return repositories.CommentRepository.Create(simple.DB(), t)
 }
 
-func (this *commentService) Delete(id int64) error {
-	return repositories.CommentRepository.UpdateColumn(simple.GetDB(), id, "status", model.CommentStatusDeleted)
+func (s *commentService) Update(t *model.Comment) error {
+	return repositories.CommentRepository.Update(simple.DB(), t)
 }
 
-func (this *commentService) Publish(userId int64, form *model.CreateCommentForm) (*model.Comment, error) {
+func (s *commentService) Updates(id int64, columns map[string]interface{}) error {
+	return repositories.CommentRepository.Updates(simple.DB(), id, columns)
+}
+
+func (s *commentService) UpdateColumn(id int64, name string, value interface{}) error {
+	return repositories.CommentRepository.UpdateColumn(simple.DB(), id, name, value)
+}
+
+func (s *commentService) Delete(id int64) error {
+	return repositories.CommentRepository.UpdateColumn(simple.DB(), id, "status", constants.StatusDeleted)
+}
+
+// 发表评论
+func (s *commentService) Publish(userId int64, form *model.CreateCommentForm) (*model.Comment, error) {
 	form.Content = strings.TrimSpace(form.Content)
 
-	if len(form.EntityType) == 0 {
+	if simple.IsBlank(form.EntityType) {
 		return nil, errors.New("参数非法")
 	}
 	if form.EntityId <= 0 {
 		return nil, errors.New("参数非法")
 	}
-	if len(form.Content) == 0 {
+	if simple.IsBlank(form.Content) {
 		return nil, errors.New("请输入评论内容")
 	}
+
 	comment := &model.Comment{
-		UserId:     userId,
-		EntityType: form.EntityType,
-		EntityId:   form.EntityId,
-		Content:    form.Content,
-		QuoteId:    form.QuoteId,
-		Status:     model.CommentStatusOk,
-		CreateTime: simple.NowTimestamp(),
+		UserId:      userId,
+		EntityType:  form.EntityType,
+		EntityId:    form.EntityId,
+		Content:     form.Content,
+		ContentType: simple.DefaultIfBlank(form.ContentType, constants.ContentTypeMarkdown),
+		QuoteId:     form.QuoteId,
+		Status:      constants.StatusOk,
+		CreateTime:  simple.NowTimestamp(),
 	}
-	if err := repositories.CommentRepository.Create(simple.GetDB(), comment); err != nil {
+	if err := s.Create(comment); err != nil {
 		return nil, err
 	}
 
-	// 更新帖子最后回复时间
-	if form.EntityType == model.EntityTypeTopic {
-		TopicService.SetLastCommentTime(form.EntityId, simple.NowTimestamp())
+	if form.EntityType == constants.EntityTopic {
+		TopicService.OnComment(form.EntityId, simple.NowTimestamp())
+	} else if form.EntityType == constants.EntityTweet {
+		TweetService.OnComment(form.EntityId)
 	}
 
-	// 发送消息
-	MessageService.SendCommentMsg(comment)
+	UserService.IncrCommentCount(userId)                // 用户跟帖计数
+	UserScoreService.IncrementPostCommentScore(comment) // 获得积分
+	MessageService.SendCommentMsg(comment)              // 发送消息
 
 	return comment, nil
 }
 
-func (this *commentService) List(entityType string, entityId int64, cursor int64) (list []model.Comment, err error) {
+// // 统计数量
+// func (s *commentService) Count(entityType string, entityId int64) int64 {
+// 	var count int64 = 0
+// 	simple.DB().Model(&model.Comment{}).Where("entity_type = ? and entity_id = ?", entityType, entityId).Count(&count)
+// 	return count
+// }
+
+// 列表
+func (s *commentService) GetComments(entityType string, entityId int64, cursor int64) (comments []model.Comment, nextCursor int64) {
+	cnd := simple.NewSqlCnd().Eq("entity_type", entityType).Eq("entity_id", entityId).Eq("status", constants.StatusOk).Desc("id").Limit(50)
 	if cursor > 0 {
-		err = simple.GetDB().Where("entity_type = ? and entity_id = ? and status = ? and id < ?", entityType,
-			entityId, model.CommentStatusOk, cursor).Order("id desc").Limit(20).Find(&list).Error
+		cnd.Lt("id", cursor)
+	}
+	comments = repositories.CommentRepository.Find(simple.DB(), cnd)
+	if len(comments) > 0 {
+		nextCursor = comments[len(comments)-1].Id
 	} else {
-		err = simple.GetDB().Where("entity_type = ? and entity_id = ? and status = ?", entityType, entityId,
-			model.CommentStatusOk).Order("id desc").Limit(20).Find(&list).Error
+		nextCursor = cursor
 	}
 	return
 }

@@ -4,7 +4,7 @@ import (
 	"github.com/jinzhu/gorm"
 	"github.com/mlogclub/simple"
 
-	"github.com/mlogclub/bbs-go/model"
+	"bbs-go/model"
 )
 
 var UserRepository = newUserRepository()
@@ -16,7 +16,7 @@ func newUserRepository() *userRepository {
 type userRepository struct {
 }
 
-func (this *userRepository) Get(db *gorm.DB, id int64) *model.User {
+func (r *userRepository) Get(db *gorm.DB, id int64) *model.User {
 	ret := &model.User{}
 	if err := db.First(ret, "id = ?", id).Error; err != nil {
 		return nil
@@ -24,7 +24,7 @@ func (this *userRepository) Get(db *gorm.DB, id int64) *model.User {
 	return ret
 }
 
-func (this *userRepository) Take(db *gorm.DB, where ...interface{}) *model.User {
+func (r *userRepository) Take(db *gorm.DB, where ...interface{}) *model.User {
 	ret := &model.User{}
 	if err := db.Take(ret, where...).Error; err != nil {
 		return nil
@@ -32,46 +32,63 @@ func (this *userRepository) Take(db *gorm.DB, where ...interface{}) *model.User 
 	return ret
 }
 
-func (this *userRepository) QueryCnd(db *gorm.DB, cnd *simple.QueryCnd) (list []model.User, err error) {
-	err = cnd.DoQuery(db).Find(&list).Error
+func (r *userRepository) Find(db *gorm.DB, cnd *simple.SqlCnd) (list []model.User) {
+	cnd.Find(db, &list)
 	return
 }
 
-func (this *userRepository) Query(db *gorm.DB, queries *simple.ParamQueries) (list []model.User, paging *simple.Paging) {
-	queries.StartQuery(db).Find(&list)
-	queries.StartCount(db).Model(&model.User{}).Count(&queries.Paging.Total)
-	paging = queries.Paging
+func (r *userRepository) FindOne(db *gorm.DB, cnd *simple.SqlCnd) *model.User {
+	ret := &model.User{}
+	if err := cnd.FindOne(db, &ret); err != nil {
+		return nil
+	}
+	return ret
+}
+
+func (r *userRepository) FindPageByParams(db *gorm.DB, params *simple.QueryParams) (list []model.User, paging *simple.Paging) {
+	return r.FindPageByCnd(db, &params.SqlCnd)
+}
+
+func (r *userRepository) FindPageByCnd(db *gorm.DB, cnd *simple.SqlCnd) (list []model.User, paging *simple.Paging) {
+	cnd.Find(db, &list)
+	count := cnd.Count(db, &model.User{})
+
+	paging = &simple.Paging{
+		Page:  cnd.Paging.Page,
+		Limit: cnd.Paging.Limit,
+		Total: count,
+	}
 	return
 }
 
-func (this *userRepository) Create(db *gorm.DB, t *model.User) (err error) {
+func (r *userRepository) Create(db *gorm.DB, t *model.User) (err error) {
 	err = db.Create(t).Error
 	return
 }
 
-func (this *userRepository) Update(db *gorm.DB, t *model.User) (err error) {
+func (r *userRepository) Update(db *gorm.DB, t *model.User) (err error) {
 	err = db.Save(t).Error
 	return
 }
 
-func (this *userRepository) Updates(db *gorm.DB, id int64, columns map[string]interface{}) (err error) {
+func (r *userRepository) Updates(db *gorm.DB, id int64, columns map[string]interface{}) (err error) {
 	err = db.Model(&model.User{}).Where("id = ?", id).Updates(columns).Error
 	return
 }
 
-func (this *userRepository) UpdateColumn(db *gorm.DB, id int64, name string, value interface{}) (err error) {
+func (r *userRepository) UpdateColumn(db *gorm.DB, id int64, name string, value interface{}) (err error) {
 	err = db.Model(&model.User{}).Where("id = ?", id).UpdateColumn(name, value).Error
 	return
 }
 
-func (this *userRepository) Delete(db *gorm.DB, id int64) {
+func (r *userRepository) Delete(db *gorm.DB, id int64) {
 	db.Delete(&model.User{}, "id = ?", id)
 }
 
-func (this *userRepository) GetByEmail(db *gorm.DB, email string) *model.User {
-	return this.Take(db, "email = ?", email)
+func (r *userRepository) GetByEmail(db *gorm.DB, email string) *model.User {
+	return r.Take(db, "email = ?", email)
 }
 
-func (this *userRepository) GetByUsername(db *gorm.DB, username string) *model.User {
-	return this.Take(db, "username = ?", username)
+func (r *userRepository) GetByUsername(db *gorm.DB, username string) *model.User {
+	return r.Take(db, "username = ?", username)
 }

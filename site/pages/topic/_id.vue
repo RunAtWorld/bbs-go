@@ -1,91 +1,218 @@
 <template>
   <div>
     <section class="main">
-      <div class="container">
-        <div class="left-main-container">
-          <div class="m-left">
-            <div class="topic-detail">
-              <div class="header">
-                <div class="left">
-                  <a :href="'/user/' + topic.user.id" :title="topic.user.nickname">
-                    <div class="avatar radius8" :style="{backgroundImage:'url(' + topic.user.avatar + ')'}" />
+      <div class="container main-container left-main">
+        <div class="left-container">
+          <div class="main-content">
+            <article
+              class="topic-detail topic-wrap"
+              itemscope
+              itemtype="http://schema.org/BlogPosting"
+            >
+              <div class="topic-header">
+                <div class="topic-header-left">
+                  <a
+                    :href="'/user/' + topic.user.id"
+                    :title="topic.user.nickname"
+                  >
+                    <img :src="topic.user.smallAvatar" class="avatar size-45" />
                   </a>
                 </div>
-                <div class="right">
-                  <div class="topic-title">
+                <div class="topic-header-center">
+                  <h1 class="topic-title" itemprop="headline">
                     {{ topic.title }}
-                  </div>
+                  </h1>
                   <div class="topic-meta">
-                    <span><a :href="'/user/' + topic.user.id">{{ topic.user.nickname }}</a></span>
-                    <span>{{ topic.lastCommentTime | prettyDate }}</span>
-                    <span>点击:{{ topic.viewCount }}</span>
-                    <span v-for="tag in topic.tags" :key="tag.tagId" class="tag"><a :href="'/topics/tag/' + tag.tagId">{{ tag.tagName }}</a></span>
-                    <span v-if="isOwner" class="act">
+                    <span
+                      class="meta-item"
+                      itemprop="author"
+                      itemscope
+                      itemtype="http://schema.org/Person"
+                    >
+                      <a :href="'/user/' + topic.user.id" itemprop="name">{{
+                        topic.user.nickname
+                      }}</a>
+                    </span>
+                    <span class="meta-item">
+                      <time
+                        :datetime="
+                          topic.lastCommentTime
+                            | formatDate('yyyy-MM-ddTHH:mm:ss')
+                        "
+                        itemprop="datePublished"
+                        >{{ topic.lastCommentTime | prettyDate }}</time
+                      >
+                    </span>
+                    <span class="meta-item">
+                      <a
+                        v-if="topic.node"
+                        :href="'/topics/node/' + topic.node.nodeId"
+                        class="node"
+                        >{{ topic.node.name }}</a
+                      >
+                    </span>
+                    <span class="meta-item">
+                      <span
+                        v-for="tag in topic.tags"
+                        :key="tag.tagId"
+                        class="tag"
+                      >
+                        <a :href="'/topics/tag/' + tag.tagId">{{
+                          tag.tagName
+                        }}</a>
+                      </span>
+                    </span>
+                    <span v-if="hasPermission" class="meta-item act">
                       <a @click="deleteTopic(topic.topicId)">
                         <i class="iconfont icon-delete" />&nbsp;删除
                       </a>
                     </span>
-                    <span v-if="isOwner" class="act">
+                    <span v-if="hasPermission" class="meta-item act">
                       <a :href="'/topic/edit/' + topic.topicId">
                         <i class="iconfont icon-edit" />&nbsp;修改
                       </a>
                     </span>
-                    <span class="act">
+                    <span class="meta-item act">
                       <a @click="addFavorite(topic.topicId)">
-                        <i class="iconfont icon-favorite" />&nbsp;{{ favorited ? '已收藏' : '收藏' }}
+                        <i class="iconfont icon-favorite" />&nbsp;{{
+                          favorited ? '已收藏' : '收藏'
+                        }}
                       </a>
                     </span>
                   </div>
                 </div>
+                <div class="topic-header-right">
+                  <div class="like">
+                    <span
+                      :class="{ liked: topic.liked }"
+                      class="like-btn"
+                      @click="like(topic)"
+                    >
+                      <i class="iconfont icon-like" />
+                    </span>
+                    <span v-if="topic.likeCount" class="like-count">{{
+                      topic.likeCount
+                    }}</span>
+                  </div>
+                  <span class="count"
+                    >{{ topic.commentCount }}&nbsp;/&nbsp;{{
+                      topic.viewCount
+                    }}</span
+                  >
+                </div>
               </div>
 
-              <div v-highlight class="content" v-html="topic.content" />
+              <div class="ad">
+                <!-- 信息流广告 -->
+                <adsbygoogle
+                  ad-slot="4980294904"
+                  ad-format="fluid"
+                  ad-layout-key="-ht-19-1m-3j+mu"
+                />
+              </div>
 
-              <ins
-                class="adsbygoogle"
-                style="display:block"
-                data-ad-format="fluid"
-                data-ad-layout-key="-ig-s+1x-t-q"
-                data-ad-client="ca-pub-5683711753850351"
-                data-ad-slot="4728140043"
-              />
-              <script>
-                (adsbygoogle = window.adsbygoogle || []).push({});
-              </script>
-            </div>
+              <div class="content topic-content" itemprop="articleBody">
+                <div
+                  v-lazy-container="{ selector: 'img' }"
+                  v-html="topic.content"
+                ></div>
+              </div>
 
-            <!-- 评论 -->
-            <comment entity-type="topic" :entity-id="topic.topicId" :show-ad="true" />
+              <div class="topic-actions">
+                <div
+                  :class="{ active: favorited }"
+                  class="action favorite"
+                  @click="addFavorite(topic.topicId)"
+                >
+                  <i class="iconfont icon-favorite" />
+                </div>
+                <span class="split"></span>
+                <div
+                  :class="{ active: topic.liked }"
+                  class="action like"
+                  @click="like(topic)"
+                >
+                  <i class="iconfont icon-like" />
+                </div>
+                <div v-for="likeUser in likeUsers" :key="likeUser.id">
+                  <a
+                    :href="'/user/' + likeUser.id"
+                    :alt="likeUser.nickname"
+                    target="_blank"
+                  >
+                    <img
+                      :src="likeUser.smallAvatar"
+                      :alt="likeUser.nickname"
+                      class="avatar size-30"
+                    />
+                  </a>
+                </div>
+              </div>
+            </article>
           </div>
-          <div class="m-right">
-            <!-- 展示广告190x90 -->
-            <ins
-              class="adsbygoogle"
-              style="display:inline-block;width:190px;height:90px"
-              data-ad-client="ca-pub-5683711753850351"
-              data-ad-slot="9345305153"
-            />
-            <script>
-              (adsbygoogle = window.adsbygoogle || []).push({});
-            </script>
 
-            <!-- 展示广告190x190 -->
-            <ins
-              class="adsbygoogle"
-              style="display:inline-block;width:190px;height:190px"
-              data-ad-client="ca-pub-5683711753850351"
-              data-ad-slot="5685455263"
-            />
-            <script>
-              (adsbygoogle = window.adsbygoogle || []).push({});
-            </script>
-
-            <div v-if="topic.toc" ref="toc" class="toc widget">
-              <div class="header">
-                目录
+          <!-- 评论 -->
+          <comment
+            :entity-id="topic.topicId"
+            :comments-page="commentsPage"
+            :comment-count="topic.commentCount"
+            :show-ad="false"
+            entity-type="topic"
+          />
+        </div>
+        <div class="right-container">
+          <a
+            class="button is-success"
+            href="/topic/create"
+            style="width: 100%;"
+          >
+            <span class="icon"><i class="iconfont icon-topic" /></span>
+            <span>发表话题</span>
+          </a>
+          <div class="user-simple">
+            <div class="base-info">
+              <a :href="'/user/' + topic.user.id" :alt="topic.user.nickname">
+                <img
+                  :src="topic.user.smallAvatar"
+                  :alt="topic.user.nickname"
+                  class="avatar"
+                />
+              </a>
+              <div class="nickname">
+                <a
+                  :href="'/user/' + topic.user.id"
+                  :alt="topic.user.nickname"
+                  >{{ topic.user.nickname }}</a
+                >
               </div>
-              <div class="content" v-html="topic.toc" />
+              <div class="description">
+                {{ topic.user.description }}
+              </div>
             </div>
+            <div class="extra-info">
+              <ul class="extra-data">
+                <li>
+                  <span>积分</span><br />
+                  <b>{{ topic.user.score }}</b>
+                </li>
+                <li>
+                  <span>注册排名</span><br />
+                  <b>{{ topic.user.id }}</b>
+                </li>
+              </ul>
+            </div>
+          </div>
+
+          <div class="ad">
+            <!-- 展示广告 -->
+            <adsbygoogle ad-slot="1742173616" />
+          </div>
+
+          <div v-if="topic.toc" ref="toc" class="widget no-bg toc">
+            <div class="widget-header">
+              目录
+            </div>
+            <div class="widget-content" v-html="topic.toc" />
           </div>
         </div>
       </div>
@@ -96,14 +223,11 @@
 <script>
 import utils from '~/common/utils'
 import Comment from '~/components/Comment'
+import UserHelper from '~/common/UserHelper'
+
 export default {
   components: {
-    Comment
-  },
-  computed: {
-    isOwner: function () {
-      return this.currentUser && this.topic && this.currentUser.id === this.topic.user.id
-    }
+    Comment,
   },
   async asyncData({ $axios, params, error }) {
     let topic
@@ -112,33 +236,53 @@ export default {
     } catch (e) {
       error({
         statusCode: 404,
-        message: '话题不存在'
+        message: '话题不存在',
       })
       return
     }
 
-    const currentUser = await $axios.get('/api/user/current')
-    const favorited = await $axios.get('/api/favorite/favorited', {
-      params: {
-        entityType: 'topic',
-        entityId: params.id
-      }
-    })
+    const [favorited, commentsPage, likeUsers] = await Promise.all([
+      $axios.get('/api/favorite/favorited', {
+        params: {
+          entityType: 'topic',
+          entityId: params.id,
+        },
+      }),
+      $axios.get('/api/comment/list', {
+        params: {
+          entityType: 'topic',
+          entityId: params.id,
+        },
+      }),
+      $axios.get('/api/topic/recentlikes/' + params.id),
+    ])
 
     return {
-      currentUser: currentUser,
-      topic: topic,
-      favorited: favorited.favorited
+      topic,
+      commentsPage,
+      favorited: favorited.favorited,
+      likeUsers,
     }
   },
-  mounted() {
-    utils.handleToc()
+  computed: {
+    hasPermission() {
+      return (
+        this.isOwner ||
+        UserHelper.isOwner(this.user) ||
+        UserHelper.isAdmin(this.user)
+      )
+    },
+    isOwner() {
+      if (!this.user || !this.topic) {
+        return false
+      }
+      return this.user.id === this.topic.user.id
+    },
+    user() {
+      return this.$store.state.user.current
+    },
   },
-  head() {
-    return {
-      title: this.$siteTitle(this.topic.title)
-    }
-  },
+  mounted() {},
   methods: {
     async addFavorite(topicId) {
       try {
@@ -146,8 +290,8 @@ export default {
           await this.$axios.get('/api/favorite/delete', {
             params: {
               entityType: 'topic',
-              entityId: topicId
-            }
+              entityId: topicId,
+            },
           })
           this.favorited = false
           this.$toast.success('已取消收藏！')
@@ -162,85 +306,108 @@ export default {
       }
     },
     async deleteTopic(topicId) {
+      if (process.client && !window.confirm('是否确认删除该话题？')) {
+        return
+      }
       try {
         await this.$axios.post('/api/topic/delete/' + topicId)
         this.$toast.success('删除成功', {
           duration: 2000,
-          onComplete: function () {
+          onComplete() {
             utils.linkTo('/topics')
-          }
+          },
         })
       } catch (e) {
         console.error(e)
         this.$toast.error('删除失败：' + (e.message || e))
       }
+    },
+    async like(topic) {
+      try {
+        await this.$axios.post('/api/topic/like/' + topic.topicId)
+        topic.liked = true
+        topic.likeCount++
+        this.likeUsers = this.likeUsers || []
+        this.likeUsers.unshift(this.$store.state.user.current)
+      } catch (e) {
+        if (e.errorCode === 1) {
+          this.$toast.info('请登录后点赞！！！', {
+            action: {
+              text: '去登录',
+              onClick: (e, toastObject) => {
+                utils.toSignin()
+              },
+            },
+          })
+        } else {
+          topic.liked = true
+          this.$toast.error(e.message || e)
+        }
+      }
+    },
+  },
+  head() {
+    return {
+      title: this.$siteTitle(this.topic.title),
     }
-  }
+  },
 }
 </script>
 
 <style lang="scss" scoped>
-  .aside-avatar {
-    width: 150px;
-    height: 150px;
-  }
-  .topic-detail {
-  margin-bottom: 20px;
+.user-simple {
+  background: #fff;
+  padding: 0;
+  margin: 10px 0;
 
-  .header {
-    display: flex;
-    border-bottom: 1px dashed #f4f4f5;
-    padding-bottom: 5px;
+  .base-info {
+    padding: 10px;
+    text-align: center;
 
-    .left {
-      margin-right: 10px;
+    .avatar {
+      min-width: 80px;
+      min-height: 80px;
+      width: 80px;
+      height: 80px;
     }
 
-    .right {
-      .topic-title {
-        color: #555;
-        font-size: 16px;
+    .nickname {
+      font-size: 15px;
+      font-weight: 700;
+      a:hover {
+        text-decoration: underline;
       }
+    }
 
-      .topic-meta {
+    .description {
+      text-align: left;
+      font-size: 13px;
+      margin-top: 5px;
+      overflow: hidden;
+      word-break: break-all;
+      text-overflow: ellipsis;
+      -webkit-line-clamp: 2;
+      -webkit-box-orient: vertical;
+      display: -webkit-box;
+    }
+  }
+
+  .extra-info {
+    padding: 0 10px;
+    background: rgba(0, 0, 0, 0.01);
+    border-top: 1px solid #f5f5f5;
+    ul.extra-data {
+      display: flex;
+      li {
+        width: 100%;
+        text-align: center;
         span {
-          font-size: 12px;
-          color: #778087;
-
-          &.act {
-            a {
-              font-size: 12px;
-              color: #3273dc;
-              margin-left: 10px;
-
-              i {
-                font-size: 12px;
-                color: #000;
-              }
-            }
-          }
-
-          a {
-            font-size: 12px;
-            color: #778087;
-          }
-
-          &:not(:last-child) {
-            margin-right: 3px;
-          }
-
-          &.tag {
-            height: auto !important;
-          }
+          font-size: 13px;
+          font-weight: 400;
+          color: #868e96;
         }
       }
     }
-  }
-
-  .content {
-    padding-top: 10px;
-    font-size: 15px;
-    color: #000;
   }
 }
 </style>

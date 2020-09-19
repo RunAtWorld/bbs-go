@@ -3,19 +3,21 @@ package admin
 import (
 	"strconv"
 
-	"github.com/mlogclub/bbs-go/controllers/render"
+	"github.com/mlogclub/simple/markdown"
 
-	"github.com/kataras/iris"
+	"bbs-go/controllers/render"
+
+	"github.com/kataras/iris/v12"
 	"github.com/mlogclub/simple"
 
-	"github.com/mlogclub/bbs-go/services"
+	"bbs-go/services"
 )
 
 type CommentController struct {
 	Ctx iris.Context
 }
 
-func (this *CommentController) GetBy(id int64) *simple.JsonResult {
+func (c *CommentController) GetBy(id int64) *simple.JsonResult {
 	t := services.CommentService.Get(id)
 	if t == nil {
 		return simple.JsonErrorMsg("Not found, id=" + strconv.FormatInt(id, 10))
@@ -23,8 +25,33 @@ func (this *CommentController) GetBy(id int64) *simple.JsonResult {
 	return simple.JsonData(t)
 }
 
-func (this *CommentController) AnyList() *simple.JsonResult {
-	list, paging := services.CommentService.Query(simple.NewParamQueries(this.Ctx).EqAuto("status").PageAuto().Desc("id"))
+func (c *CommentController) AnyList() *simple.JsonResult {
+	var (
+		id         = simple.FormValueInt64Default(c.Ctx, "id", 0)
+		userId     = simple.FormValueInt64Default(c.Ctx, "userId", 0)
+		entityType = simple.FormValueDefault(c.Ctx, "entityType", "")
+		entityId   = simple.FormValueInt64Default(c.Ctx, "entityId", 0)
+	)
+	params := simple.NewQueryParams(c.Ctx).
+		EqByReq("status").
+		PageByReq().Desc("id")
+
+	if id > 0 {
+		params.Eq("id", id)
+	}
+	if userId > 0 {
+		params.Eq("user_id", userId)
+	}
+	if simple.IsNotBlank(entityType) && entityId > 0 {
+		params.Eq("entity_type", entityType).Eq("entity_id", entityId)
+	}
+
+	if id <= 0 && userId <= 0 && (simple.IsBlank(entityType) || entityId <= 0) {
+		// return simple.JsonErrorMsg("请输入必要的查询参数。")
+		return simple.JsonSuccess()
+	}
+
+	list, paging := services.CommentService.FindPageByParams(params)
 
 	var results []map[string]interface{}
 	for _, comment := range list {
@@ -34,18 +61,17 @@ func (this *CommentController) AnyList() *simple.JsonResult {
 		builder = builder.Put("user", render.BuildUserDefaultIfNull(comment.UserId))
 
 		// 简介
-		mr := simple.NewMd().Run(comment.Content)
-		builder.Put("content", mr.ContentHtml)
+		content, _ := markdown.New().Run(comment.Content)
+		builder.Put("content", content)
 
 		results = append(results, builder.Build())
 	}
 
-	return simple.JsonData(&simple.PageResult{Results: results, Page: paging})
+	return simple.JsonPageData(results, paging)
 }
 
-func (this *CommentController) PostDeleteBy(id int64) *simple.JsonResult {
-	err := services.CommentService.Delete(id)
-	if err != nil {
+func (c *CommentController) PostDeleteBy(id int64) *simple.JsonResult {
+	if err := services.CommentService.Delete(id); err != nil {
 		return simple.JsonErrorMsg(err.Error())
 	} else {
 		return simple.JsonSuccess()

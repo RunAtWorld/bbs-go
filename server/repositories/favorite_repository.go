@@ -4,7 +4,7 @@ import (
 	"github.com/jinzhu/gorm"
 	"github.com/mlogclub/simple"
 
-	"github.com/mlogclub/bbs-go/model"
+	"bbs-go/model"
 )
 
 var FavoriteRepository = newFavoriteRepository()
@@ -16,7 +16,7 @@ func newFavoriteRepository() *favoriteRepository {
 type favoriteRepository struct {
 }
 
-func (this *favoriteRepository) Get(db *gorm.DB, id int64) *model.Favorite {
+func (r *favoriteRepository) Get(db *gorm.DB, id int64) *model.Favorite {
 	ret := &model.Favorite{}
 	if err := db.First(ret, "id = ?", id).Error; err != nil {
 		return nil
@@ -24,7 +24,7 @@ func (this *favoriteRepository) Get(db *gorm.DB, id int64) *model.Favorite {
 	return ret
 }
 
-func (this *favoriteRepository) Take(db *gorm.DB, where ...interface{}) *model.Favorite {
+func (r *favoriteRepository) Take(db *gorm.DB, where ...interface{}) *model.Favorite {
 	ret := &model.Favorite{}
 	if err := db.Take(ret, where...).Error; err != nil {
 		return nil
@@ -32,38 +32,55 @@ func (this *favoriteRepository) Take(db *gorm.DB, where ...interface{}) *model.F
 	return ret
 }
 
-func (this *favoriteRepository) QueryCnd(db *gorm.DB, cnd *simple.QueryCnd) (list []model.Favorite, err error) {
-	err = cnd.DoQuery(db).Find(&list).Error
+func (r *favoriteRepository) Find(db *gorm.DB, cnd *simple.SqlCnd) (list []model.Favorite) {
+	cnd.Find(db, &list)
 	return
 }
 
-func (this *favoriteRepository) Query(db *gorm.DB, queries *simple.ParamQueries) (list []model.Favorite, paging *simple.Paging) {
-	queries.StartQuery(db).Find(&list)
-	queries.StartCount(db).Model(&model.Favorite{}).Count(&queries.Paging.Total)
-	paging = queries.Paging
+func (r *favoriteRepository) FindOne(db *gorm.DB, cnd *simple.SqlCnd) *model.Favorite {
+	ret := &model.Favorite{}
+	if err := cnd.FindOne(db, &ret); err != nil {
+		return nil
+	}
+	return ret
+}
+
+func (r *favoriteRepository) FindPageByParams(db *gorm.DB, params *simple.QueryParams) (list []model.Favorite, paging *simple.Paging) {
+	return r.FindPageByCnd(db, &params.SqlCnd)
+}
+
+func (r *favoriteRepository) FindPageByCnd(db *gorm.DB, cnd *simple.SqlCnd) (list []model.Favorite, paging *simple.Paging) {
+	cnd.Find(db, &list)
+	count := cnd.Count(db, &model.Favorite{})
+
+	paging = &simple.Paging{
+		Page:  cnd.Paging.Page,
+		Limit: cnd.Paging.Limit,
+		Total: count,
+	}
 	return
 }
 
-func (this *favoriteRepository) Create(db *gorm.DB, t *model.Favorite) (err error) {
+func (r *favoriteRepository) Create(db *gorm.DB, t *model.Favorite) (err error) {
 	err = db.Create(t).Error
 	return
 }
 
-func (this *favoriteRepository) Update(db *gorm.DB, t *model.Favorite) (err error) {
+func (r *favoriteRepository) Update(db *gorm.DB, t *model.Favorite) (err error) {
 	err = db.Save(t).Error
 	return
 }
 
-func (this *favoriteRepository) Updates(db *gorm.DB, id int64, columns map[string]interface{}) (err error) {
+func (r *favoriteRepository) Updates(db *gorm.DB, id int64, columns map[string]interface{}) (err error) {
 	err = db.Model(&model.Favorite{}).Where("id = ?", id).Updates(columns).Error
 	return
 }
 
-func (this *favoriteRepository) UpdateColumn(db *gorm.DB, id int64, name string, value interface{}) (err error) {
+func (r *favoriteRepository) UpdateColumn(db *gorm.DB, id int64, name string, value interface{}) (err error) {
 	err = db.Model(&model.Favorite{}).Where("id = ?", id).UpdateColumn(name, value).Error
 	return
 }
 
-func (this *favoriteRepository) Delete(db *gorm.DB, id int64) {
+func (r *favoriteRepository) Delete(db *gorm.DB, id int64) {
 	db.Delete(&model.Favorite{}, "id = ?", id)
 }

@@ -1,31 +1,28 @@
 <template>
   <section class="main">
-    <div class="container">
-      <div class="columns">
-        <div class="column is-9">
-          <div class="main-body">
-            <nav class="breadcrumb" aria-label="breadcrumbs" style="margin-bottom: 10px;">
-              <ul>
-                <li><a href="article">首页</a></li>
-                <li><a :href="'/user/'+ user.id +'?tab=articles'">{{ user.nickname }}</a></li>
-                <li class="is-active">
-                  <a href="#" aria-current="page">话题列表</a>
-                </li>
-              </ul>
-            </nav>
+    <div class="container main-container is-white left-main">
+      <div class="left-container">
+        <nav class="breadcrumb my-breadcrumb">
+          <ul>
+            <li><a href="article">首页</a></li>
+            <li>
+              <a :href="'/user/' + user.id + '?tab=articles'">{{
+                user.nickname
+              }}</a>
+            </li>
+            <li class="is-active">
+              <a href="#" aria-current="page">文章列表</a>
+            </li>
+          </ul>
+        </nav>
 
-            <article-list :articles="articlesPage.results" />
-            <pagination :page="articlesPage.page" :url-prefix="'/user/'+ user.id +'/articles/'" />
-          </div>
-        </div>
-        <div class="column is-3">
-          <div class="main-aside">
-            <div class="main-aside">
-              <user-center-sidebar :user="user" :current-user="currentUser" />
-            </div>
-          </div>
-        </div>
+        <article-list :articles="articlesPage.results" />
+        <pagination
+          :page="articlesPage.page"
+          :url-prefix="'/user/' + user.id + '/articles/'"
+        />
       </div>
+      <user-center-sidebar :user="user" />
     </div>
   </section>
 </template>
@@ -36,41 +33,52 @@ import Pagination from '~/components/Pagination'
 import UserCenterSidebar from '~/components/UserCenterSidebar'
 export default {
   components: {
-    ArticleList, Pagination, UserCenterSidebar
+    ArticleList,
+    Pagination,
+    UserCenterSidebar,
   },
-  computed: {
-    // 是否是主人态
-    isOwner: function () {
-      return (
-        this.user && this.currentUser && this.user.id === this.currentUser.id
-      )
+  async asyncData({ $axios, params, error }) {
+    let user
+    try {
+      user = await $axios.get('/api/user/' + params.userId)
+    } catch (err) {
+      error({
+        statusCode: 404,
+        message: err.message || '系统错误',
+      })
+      return
     }
-  },
-  head() {
-    return {
-      title: this.$siteTitle(this.user.nickname + ' - 文章')
-    }
-  },
-  async asyncData({ $axios, params }) {
-    const [currentUser, user, articlesPage] = await Promise.all([
-      $axios.get('/api/user/current'),
-      $axios.get('/api/user/' + params.userId),
+
+    const [articlesPage] = await Promise.all([
       $axios.get('/api/article/user/articles', {
         params: {
           userId: params.userId,
-          page: params.page
-        }
-      })
+          page: params.page,
+        },
+      }),
     ])
+
     return {
-      currentUser: currentUser,
-      user: user,
-      articlesPage: articlesPage
+      user,
+      articlesPage,
     }
-  }
+  },
+  computed: {
+    currentUser() {
+      return this.$store.state.user.current
+    },
+    // 是否是主人态
+    isOwner() {
+      const current = this.$store.state.user.current
+      return this.user && current && this.user.id === current.id
+    },
+  },
+  head() {
+    return {
+      title: this.$siteTitle(this.user.nickname + ' - 文章'),
+    }
+  },
 }
 </script>
 
-<style lang="scss" scoped>
-
-</style>
+<style lang="scss" scoped></style>

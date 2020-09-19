@@ -1,26 +1,33 @@
 package admin
 
 import (
+	"bbs-go/model/constants"
 	"strconv"
-	"strings"
 
-	"github.com/PuerkitoBio/goquery"
+	"bbs-go/model"
+	"bbs-go/sitemap"
 
-	"github.com/kataras/iris"
+	"github.com/kataras/iris/v12"
 	"github.com/mlogclub/simple"
 
-	"github.com/mlogclub/bbs-go/controllers/render"
-	"github.com/mlogclub/bbs-go/model"
-	"github.com/mlogclub/bbs-go/services"
-	"github.com/mlogclub/bbs-go/services/cache"
-	"github.com/mlogclub/bbs-go/services/collect"
+	"bbs-go/cache"
+	"bbs-go/common"
+	"bbs-go/controllers/render"
+	"bbs-go/services"
 )
 
 type ArticleController struct {
 	Ctx iris.Context
 }
 
-func (this *ArticleController) GetBy(id int64) *simple.JsonResult {
+func (c *ArticleController) GetSitemap() *simple.JsonResult {
+	go func() {
+		sitemap.Generate()
+	}()
+	return simple.JsonSuccess()
+}
+
+func (c *ArticleController) GetBy(id int64) *simple.JsonResult {
 	t := services.ArticleService.Get(id)
 	if t == nil {
 		return simple.JsonErrorMsg("Not found, id=" + strconv.FormatInt(id, 10))
@@ -28,37 +35,47 @@ func (this *ArticleController) GetBy(id int64) *simple.JsonResult {
 	return simple.JsonData(t)
 }
 
-func (this *ArticleController) AnyList() *simple.JsonResult {
-	list, paging := services.ArticleService.Query(simple.NewParamQueries(this.Ctx).
-		EqAuto("id").EqAuto("user_id").EqAuto("status").LikeAuto("title").PageAuto().Desc("id"))
+func (c *ArticleController) AnyList() *simple.JsonResult {
+	var (
+		id     = simple.FormValueInt64Default(c.Ctx, "id", 0)
+		userId = simple.FormValueInt64Default(c.Ctx, "userId", 0)
+	)
+	params := simple.NewQueryParams(c.Ctx)
+	if id > 0 {
+		params.Eq("id", id)
+	}
+	if userId > 0 {
+		params.Eq("user_id", userId)
+	}
+	params.EqByReq("status").EqByReq("title").PageByReq().Desc("id")
 
+	if id <= 0 && userId <= 0 {
+		return simple.JsonErrorMsg("请指定查询的【文章编号】或【作者编号】")
+	}
+	list, paging := services.ArticleService.FindPageByParams(params)
+	results := c.buildArticles(list)
+	return simple.JsonPageData(results, paging)
+}
+
+// GetRecent 展示最近一页数据
+func (c *ArticleController) GetRecent() *simple.JsonResult {
+	params := simple.NewQueryParams(c.Ctx).EqByReq("id").EqByReq("user_id").EqByReq("status").Desc("id").Limit(20)
+	list := services.ArticleService.Find(&params.SqlCnd)
+	results := c.buildArticles(list)
+	return simple.JsonData(results)
+}
+
+// 构建文章列表返回数据
+func (c *ArticleController) buildArticles(articles []model.Article) []map[string]interface{} {
 	var results []map[string]interface{}
-	for _, article := range list {
+	for _, article := range articles {
 		builder := simple.NewRspBuilderExcludes(article, "content")
 
 		// 用户
 		builder = builder.Put("user", render.BuildUserDefaultIfNull(article.UserId))
 
 		// 简介
-		if article.ContentType == model.ContentTypeMarkdown {
-			mr := simple.NewMd().Run(article.Content)
-			if len(article.Summary) == 0 {
-				builder.Put("summary", mr.SummaryText)
-			}
-		} else {
-			if len(article.Summary) == 0 {
-				doc, err := goquery.NewDocumentFromReader(strings.NewReader(article.Content))
-				if err != nil {
-					builder.Put("summary", simple.GetSummary(doc.Text(), 256))
-				}
-			}
-		}
-
-		// 分类
-		if article.CategoryId > 0 {
-			category := cache.CategoryCache.Get(article.CategoryId)
-			builder.Put("category", render.BuildCategory(category))
-		}
+		builder.Put("summary", common.GetSummary(article.ContentType, article.Content))
 
 		// 标签
 		tagIds := cache.ArticleTagCache.Get(article.Id)
@@ -67,16 +84,11 @@ func (this *ArticleController) AnyList() *simple.JsonResult {
 
 		results = append(results, builder.Build())
 	}
-
-	return simple.JsonData(&simple.PageResult{Results: results, Page: paging})
+	return results
 }
 
-func (this *ArticleController) PostCreate() *simple.JsonResult {
-	return simple.JsonErrorMsg("为实现")
-}
-
-func (this *ArticleController) PostUpdate() *simple.JsonResult {
-	id := this.Ctx.PostValueInt64Default("id", 0)
+func (c *ArticleController) PostUpdate() *simple.JsonResult {
+	id := c.Ctx.PostValueInt64Default("id", 0)
 	if id <= 0 {
 		return simple.JsonErrorMsg("id is required")
 	}
@@ -85,7 +97,9 @@ func (this *ArticleController) PostUpdate() *simple.JsonResult {
 		return simple.JsonErrorMsg("entity not found")
 	}
 
-	this.Ctx.ReadForm(t)
+	if err := simple.ReadForm(c.Ctx, t); err != nil {
+		return simple.JsonErrorMsg(err.Error())
+	}
 
 	// 数据校验
 	if len(t.Title) == 0 {
@@ -107,8 +121,23 @@ func (this *ArticleController) PostUpdate() *simple.JsonResult {
 	return simple.JsonData(t)
 }
 
-func (this *ArticleController) PostDelete() *simple.JsonResult {
-	id := this.Ctx.PostValueInt64Default("id", 0)
+func (c *ArticleController) GetTags() *simple.JsonResult {
+	articleId := simple.FormValueInt64Default(c.Ctx, "articleId", 0)
+	tags := services.ArticleService.GetArticleTags(articleId)
+	return simple.JsonData(render.BuildTags(tags))
+}
+
+func (c *ArticleController) PutTags() *simple.JsonResult {
+	var (
+		articleId = simple.FormValueInt64Default(c.Ctx, "articleId", 0)
+		tags      = simple.FormValueStringArray(c.Ctx, "tags")
+	)
+	services.ArticleService.PutTags(articleId, tags)
+	return simple.JsonData(render.BuildTags(services.ArticleService.GetArticleTags(articleId)))
+}
+
+func (c *ArticleController) PostDelete() *simple.JsonResult {
+	id := c.Ctx.PostValueInt64Default("id", 0)
 	if id <= 0 {
 		return simple.JsonErrorMsg("id is required")
 	}
@@ -119,14 +148,14 @@ func (this *ArticleController) PostDelete() *simple.JsonResult {
 	return simple.JsonSuccess()
 }
 
-func (this *ArticleController) PostCollect() *simple.JsonResult {
-	url := this.Ctx.PostValue("url")
-	if len(url) == 0 {
-		return simple.JsonErrorMsg("链接不存在")
+func (c *ArticleController) PostPending() *simple.JsonResult {
+	id := c.Ctx.PostValueInt64Default("id", 0)
+	if id <= 0 {
+		return simple.JsonErrorMsg("id is required")
 	}
-	title, content, err := collect.Collect(url, true)
+	err := services.ArticleService.UpdateColumn(id, "status", constants.StatusOk)
 	if err != nil {
 		return simple.JsonErrorMsg(err.Error())
 	}
-	return simple.NewEmptyRspBuilder().Put("title", title).Put("content", content).JsonResult()
+	return simple.JsonSuccess()
 }

@@ -1,50 +1,61 @@
 package api
 
 import (
-	"errors"
-	"io/ioutil"
+	"bbs-go/model/constants"
 	"math/rand"
-	"strings"
+	"strconv"
 
-	"github.com/kataras/iris/context"
+	"github.com/kataras/iris/v12"
 	"github.com/mlogclub/simple"
 
-	"github.com/mlogclub/bbs-go/common/urls"
-	"github.com/mlogclub/bbs-go/controllers/render"
-	"github.com/mlogclub/bbs-go/model"
-	"github.com/mlogclub/bbs-go/services"
-	"github.com/mlogclub/bbs-go/services/cache"
-	"github.com/mlogclub/bbs-go/services/collect"
+	"bbs-go/cache"
+	"bbs-go/common/urls"
+	"bbs-go/controllers/render"
+	"bbs-go/model"
+	"bbs-go/services"
 )
 
 type ArticleController struct {
-	Ctx context.Context
+	Ctx iris.Context
 }
 
 // 文章详情
-func (this *ArticleController) GetBy(articleId int64) *simple.JsonResult {
+func (c *ArticleController) GetBy(articleId int64) *simple.JsonResult {
 	article := services.ArticleService.Get(articleId)
-	if article == nil || article.Status != model.ArticleStatusPublished {
-		return simple.JsonErrorMsg("文章不存在")
+	if article == nil || article.Status == constants.StatusDeleted {
+		return simple.JsonErrorCode(404, "文章不存在")
 	}
+
+	user := services.UserTokenService.GetCurrent(c.Ctx)
+	if user != nil {
+		if article.UserId != user.Id && article.Status == constants.StatusPending {
+			return simple.JsonErrorCode(403, "文章审核中")
+		}
+	} else {
+		if article.Status == constants.StatusPending {
+			return simple.JsonErrorCode(403, "文章审核中")
+		}
+	}
+
+	services.ArticleService.IncrViewCount(articleId) // 增加浏览量
 	return simple.JsonData(render.BuildArticle(article))
 }
 
 // 发表文章
-func (this *ArticleController) PostCreate() *simple.JsonResult {
-	user := services.UserTokenService.GetCurrent(this.Ctx)
-	if user == nil {
-		return simple.JsonError(simple.ErrorNotLogin)
+func (c *ArticleController) PostCreate() *simple.JsonResult {
+	user := services.UserTokenService.GetCurrent(c.Ctx)
+	if err := services.UserService.CheckPostStatus(user); err != nil {
+		return simple.JsonError(err)
 	}
 	var (
-		tags    = simple.FormValueStringArray(this.Ctx, "tags")
-		title   = this.Ctx.PostValue("title")
-		summary = this.Ctx.PostValue("summary")
-		content = this.Ctx.PostValue("content")
+		tags    = simple.FormValueStringArray(c.Ctx, "tags")
+		title   = c.Ctx.PostValue("title")
+		summary = c.Ctx.PostValue("summary")
+		content = c.Ctx.PostValue("content")
 	)
 
 	article, err := services.ArticleService.Publish(user.Id, title, summary, content,
-		model.ContentTypeMarkdown, 0, tags, "", false)
+		constants.ContentTypeMarkdown, tags, "")
 	if err != nil {
 		return simple.JsonErrorMsg(err.Error())
 	}
@@ -52,17 +63,19 @@ func (this *ArticleController) PostCreate() *simple.JsonResult {
 }
 
 // 编辑时获取详情
-func (this *ArticleController) GetEditBy(articleId int64) *simple.JsonResult {
-	user := services.UserTokenService.GetCurrent(this.Ctx)
-	if user == nil {
-		return simple.JsonError(simple.ErrorNotLogin)
+func (c *ArticleController) GetEditBy(articleId int64) *simple.JsonResult {
+	user := services.UserTokenService.GetCurrent(c.Ctx)
+	if err := services.UserService.CheckPostStatus(user); err != nil {
+		return simple.JsonError(err)
 	}
 
 	article := services.ArticleService.Get(articleId)
-	if article == nil || article.Status != model.ArticleStatusPublished {
+	if article == nil || article.Status == constants.StatusDeleted {
 		return simple.JsonErrorMsg("话题不存在或已被删除")
 	}
-	if article.UserId != user.Id {
+
+	// 非作者、且非管理员
+	if article.UserId != user.Id && !user.HasAnyRole(constants.RoleAdmin, constants.RoleOwner) {
 		return simple.JsonErrorMsg("无权限")
 	}
 
@@ -83,60 +96,66 @@ func (this *ArticleController) GetEditBy(articleId int64) *simple.JsonResult {
 }
 
 // 编辑文章
-func (this *ArticleController) PostEditBy(articleId int64) *simple.JsonResult {
-	user := services.UserTokenService.GetCurrent(this.Ctx)
-	if user == nil {
-		return simple.JsonError(simple.ErrorNotLogin)
+func (c *ArticleController) PostEditBy(articleId int64) *simple.JsonResult {
+	user := services.UserTokenService.GetCurrent(c.Ctx)
+	if err := services.UserService.CheckPostStatus(user); err != nil {
+		return simple.JsonError(err)
 	}
 
 	var (
-		tags    = simple.FormValueStringArray(this.Ctx, "tags")
-		title   = this.Ctx.PostValue("title")
-		content = this.Ctx.PostValue("content")
+		tags    = simple.FormValueStringArray(c.Ctx, "tags")
+		title   = c.Ctx.PostValue("title")
+		content = c.Ctx.PostValue("content")
 	)
 
 	article := services.ArticleService.Get(articleId)
-	if article == nil || article.Status == model.ArticleStatusDeleted {
+	if article == nil || article.Status == constants.StatusDeleted {
 		return simple.JsonErrorMsg("文章不存在")
 	}
 
-	if article.UserId != user.Id {
+	// 非作者、且非管理员
+	if article.UserId != user.Id && !user.HasAnyRole(constants.RoleAdmin, constants.RoleOwner) {
 		return simple.JsonErrorMsg("无权限")
 	}
 
-	err := services.ArticleService.Edit(articleId, tags, title, content)
-	if err != nil {
+	if err := services.ArticleService.Edit(articleId, tags, title, content); err != nil {
 		return simple.JsonError(err)
 	}
+	// 操作日志
+	services.OperateLogService.AddOperateLog(user.Id, constants.OpTypeUpdate, constants.EntityArticle, articleId,
+		"", c.Ctx.Request())
 	return simple.NewEmptyRspBuilder().Put("articleId", article.Id).JsonResult()
 }
 
 // 删除文章
-func (this *ArticleController) PostDeleteBy(articleId int64) *simple.JsonResult {
-	user := services.UserTokenService.GetCurrent(this.Ctx)
-	if user == nil {
-		return simple.JsonError(simple.ErrorNotLogin)
+func (c *ArticleController) PostDeleteBy(articleId int64) *simple.JsonResult {
+	user := services.UserTokenService.GetCurrent(c.Ctx)
+	if err := services.UserService.CheckPostStatus(user); err != nil {
+		return simple.JsonError(err)
 	}
 
 	article := services.ArticleService.Get(articleId)
-	if article == nil || article.Status == model.ArticleStatusDeleted {
+	if article == nil || article.Status == constants.StatusDeleted {
 		return simple.JsonErrorMsg("文章不存在")
 	}
 
-	if article.UserId != user.Id {
+	// 非作者、且非管理员
+	if article.UserId != user.Id && !user.HasAnyRole(constants.RoleAdmin, constants.RoleOwner) {
 		return simple.JsonErrorMsg("无权限")
 	}
 
-	err := services.ArticleService.Delete(articleId)
-	if err != nil {
+	if err := services.ArticleService.Delete(articleId); err != nil {
 		return simple.JsonErrorMsg(err.Error())
 	}
+	// 操作日志
+	services.OperateLogService.AddOperateLog(user.Id, constants.OpTypeDelete, constants.EntityArticle, articleId,
+		"", c.Ctx.Request())
 	return simple.JsonSuccess()
 }
 
 // 收藏文章
-func (this *ArticleController) PostFavoriteBy(articleId int64) *simple.JsonResult {
-	user := services.UserTokenService.GetCurrent(this.Ctx)
+func (c *ArticleController) PostFavoriteBy(articleId int64) *simple.JsonResult {
+	user := services.UserTokenService.GetCurrent(c.Ctx)
 	if user == nil {
 		return simple.JsonError(simple.ErrorNotLogin)
 	}
@@ -148,98 +167,82 @@ func (this *ArticleController) PostFavoriteBy(articleId int64) *simple.JsonResul
 }
 
 // 文章跳转链接
-func (this *ArticleController) GetRedirectBy(articleId int64) *simple.JsonResult {
+func (c *ArticleController) GetRedirectBy(articleId int64) *simple.JsonResult {
 	article := services.ArticleService.Get(articleId)
-	if article == nil || article.Status != model.ArticleStatusPublished {
+	if article == nil || article.Status != constants.StatusOk {
 		return simple.JsonErrorMsg("文章不存在")
 	}
-	if article.Share && len(article.SourceUrl) > 0 {
-		return simple.NewEmptyRspBuilder().Put("url", article.SourceUrl).JsonResult()
-	} else {
-		return simple.NewEmptyRspBuilder().Put("url", urls.ArticleUrl(articleId)).JsonResult()
-	}
+	return simple.NewEmptyRspBuilder().Put("url", urls.ArticleUrl(articleId)).JsonResult()
 }
 
 // 最近文章
-func (this *ArticleController) GetRecent() *simple.JsonResult {
-	articles, err := services.ArticleService.QueryCnd(simple.NewQueryCnd("status = ?", model.ArticleStatusPublished).Order("id desc").Size(10))
-	if err != nil {
-		return simple.JsonErrorMsg(err.Error())
-	}
+func (c *ArticleController) GetRecent() *simple.JsonResult {
+	articles := services.ArticleService.Find(simple.NewSqlCnd().Where("status = ?", constants.StatusOk).Desc("id").Limit(10))
 	return simple.JsonData(render.BuildSimpleArticles(articles))
 }
 
 // 用户最近的文章
-func (this *ArticleController) GetUserRecent() *simple.JsonResult {
-	userId, err := simple.FormValueInt64(this.Ctx, "userId")
+func (c *ArticleController) GetUserRecent() *simple.JsonResult {
+	userId, err := simple.FormValueInt64(c.Ctx, "userId")
 	if err != nil {
 		return simple.JsonErrorMsg(err.Error())
 	}
-	articles, err := services.ArticleService.QueryCnd(simple.NewQueryCnd("user_id = ? and status = ?", userId, model.ArticleStatusPublished).Order("id desc").Size(10))
-	if err != nil {
-		return simple.JsonErrorMsg(err.Error())
-	}
+	articles := services.ArticleService.Find(simple.NewSqlCnd().Where("user_id = ? and (status = ? or status = ?)",
+		userId, constants.StatusOk, constants.StatusPending).Desc("id").Limit(10))
 	return simple.JsonData(render.BuildSimpleArticles(articles))
 }
 
 // 用户文章列表
-func (this *ArticleController) GetUserArticles() *simple.JsonResult {
-	userId, err := simple.FormValueInt64(this.Ctx, "userId")
+func (c *ArticleController) GetUserArticles() *simple.JsonResult {
+	userId, err := simple.FormValueInt64(c.Ctx, "userId")
 	if err != nil {
 		return simple.JsonErrorMsg(err.Error())
 	}
-	page := simple.FormValueIntDefault(this.Ctx, "page", 1)
+	page := simple.FormValueIntDefault(c.Ctx, "page", 1)
 
-	articles, paging := services.ArticleService.Query(simple.NewParamQueries(this.Ctx).
+	articles, paging := services.ArticleService.FindPageByCnd(simple.NewSqlCnd().
 		Eq("user_id", userId).
-		Eq("status", model.ArticleStatusPublished).
+		Eq("status", constants.StatusOk).
 		Page(page, 20).Desc("id"))
 
 	return simple.JsonPageData(render.BuildSimpleArticles(articles), paging)
 }
 
 // 文章列表
-func (this *ArticleController) GetArticles() *simple.JsonResult {
-	page := simple.FormValueIntDefault(this.Ctx, "page", 1)
-	articles, paging := services.ArticleService.Query(simple.NewParamQueries(this.Ctx).
-		Eq("status", model.ArticleStatusPublished).
-		Page(page, 20).Desc("id"))
-	return simple.JsonPageData(render.BuildSimpleArticles(articles), paging)
+func (c *ArticleController) GetArticles() *simple.JsonResult {
+	cursor := simple.FormValueInt64Default(c.Ctx, "cursor", 0)
+	articles, cursor := services.ArticleService.GetArticles(cursor)
+	return simple.JsonCursorData(render.BuildSimpleArticles(articles), strconv.FormatInt(cursor, 10))
 }
 
 // 标签文章列表
-func (this *ArticleController) GetTagArticles() *simple.JsonResult {
-	tagId := simple.FormValueInt64Default(this.Ctx, "tagId", 0)
-	page := simple.FormValueIntDefault(this.Ctx, "page", 1)
-	articles, paging := services.ArticleService.GetTagArticles(tagId, page)
-	return simple.JsonPageData(render.BuildSimpleArticles(articles), paging)
-}
-
-// 分类文章列表
-func (this *ArticleController) GetCategoryArticles() *simple.JsonResult {
-	categoryId := simple.FormValueInt64Default(this.Ctx, "categoryId", 0)
-	page := simple.FormValueIntDefault(this.Ctx, "page", 1)
-	articles, paging := services.ArticleService.Query(simple.NewParamQueries(this.Ctx).
-		Eq("category_id", categoryId).
-		Eq("status", model.ArticleStatusPublished).
-		Page(page, 20).Desc("id"))
-	return simple.JsonPageData(render.BuildSimpleArticles(articles), paging)
+func (c *ArticleController) GetTagArticles() *simple.JsonResult {
+	cursor := simple.FormValueInt64Default(c.Ctx, "cursor", 0)
+	tagId := simple.FormValueInt64Default(c.Ctx, "tagId", 0)
+	articles, cursor := services.ArticleService.GetTagArticles(tagId, cursor)
+	return simple.JsonCursorData(render.BuildSimpleArticles(articles), strconv.FormatInt(cursor, 10))
 }
 
 // 用户最新的文章
-func (this *ArticleController) GetUserNewestBy(userId int64) *simple.JsonResult {
-	newestArticles := services.ArticleService.GetUserNewestArticles(userId)
-	return simple.JsonData(render.BuildSimpleArticles(newestArticles))
+func (c *ArticleController) GetUserNewestBy(userId int64) *simple.JsonResult {
+	articles := services.ArticleService.GetUserNewestArticles(userId)
+	return simple.JsonData(render.BuildSimpleArticles(articles))
+}
+
+// 近期文章
+func (c *ArticleController) GetNearlyBy(articleId int64) *simple.JsonResult {
+	articles := services.ArticleService.GetNearlyArticles(articleId)
+	return simple.JsonData(render.BuildSimpleArticles(articles))
 }
 
 // 相关文章
-func (this *ArticleController) GetRelatedBy(articleId int64) *simple.JsonResult {
+func (c *ArticleController) GetRelatedBy(articleId int64) *simple.JsonResult {
 	relatedArticles := services.ArticleService.GetRelatedArticles(articleId)
 	return simple.JsonData(render.BuildSimpleArticles(relatedArticles))
 }
 
 // 推荐
-func (this *ArticleController) GetRecommend() *simple.JsonResult {
+func (c *ArticleController) GetRecommend() *simple.JsonResult {
 	articles := cache.ArticleCache.GetRecommendArticles()
 	if articles == nil || len(articles) == 0 {
 		return simple.JsonSuccess()
@@ -258,53 +261,14 @@ func (this *ArticleController) GetRecommend() *simple.JsonResult {
 	}
 }
 
-// 微信采集发布接口
-func (this *ArticleController) PostWxpublish() *simple.JsonResult {
-	err := this.checkToken()
-	if err != nil {
-		return simple.JsonErrorMsg(err.Error())
-	}
-	article := &collect.WxArticle{}
-	err = this.Ctx.ReadJSON(article)
-	if err != nil {
-		return simple.JsonErrorMsg(err.Error())
-	}
-	t, err := collect.NewWxbotApi().Publish(article)
-	if err != nil {
-		return simple.JsonErrorMsg(err.Error())
-	}
-	return simple.NewEmptyRspBuilder().Put("id", t.Id).JsonResult()
+// 最新文章
+func (c *ArticleController) GetNewest() *simple.JsonResult {
+	articles := services.ArticleService.Find(simple.NewSqlCnd().Eq("status", constants.StatusOk).Desc("id").Limit(5))
+	return simple.JsonData(render.BuildSimpleArticles(articles))
 }
 
-// 采集发布
-func (this *ArticleController) PostSpiderPublish() *simple.JsonResult {
-	err := this.checkToken()
-	if err != nil {
-		return simple.JsonErrorMsg(err.Error())
-	}
-
-	article := &collect.SpiderArticle{}
-	err = this.Ctx.ReadJSON(article)
-	if err != nil {
-		return simple.JsonErrorMsg(err.Error())
-	}
-
-	articleId, err := collect.NewSpiderApi().Publish(article)
-	if err != nil {
-		return simple.JsonErrorMsg(err.Error())
-	}
-	return simple.NewEmptyRspBuilder().Put("id", articleId).JsonResult()
-}
-
-func (this *ArticleController) checkToken() error {
-	token := this.Ctx.FormValue("token")
-	data, err := ioutil.ReadFile("/data/publish_token")
-	if err != nil {
-		return err
-	}
-	token2 := strings.TrimSpace(string(data))
-	if token != token2 {
-		return errors.New("token invalidate")
-	}
-	return nil
+// 热门文章
+func (c *ArticleController) GetHot() *simple.JsonResult {
+	articles := cache.ArticleCache.GetHotArticles()
+	return simple.JsonData(render.BuildSimpleArticles(articles))
 }

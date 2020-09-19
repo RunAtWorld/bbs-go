@@ -1,22 +1,50 @@
 <template>
   <div class="projects">
     <ul>
-      <li v-for="p in projects" :key="p.projectId" class="project">
-        <div class="project-header">
-          <a :href="'/project/' + p.projectId">
-            <span class="project-name">{{ p.name }}</span>
-            <span v-if="p.title" class="project-title">&nbsp;-&nbsp;{{ p.title }}</span>
-          </a>
-        </div>
-        <div class="summary">
-          {{ p.summary }}
-        </div>
-        <div class="meta">
-          <span>
-            <a :href="'/user/' + p.user.id">{{ p.user.nickname }}</a>
+      <li v-for="(p, index) in projects" :key="p.projectId" class="project">
+        <article itemscope itemtype="http://schema.org/BlogPosting">
+          <div
+            v-if="index === 2 || index === 6 || index === 12 || index === 18"
+          >
+            <!-- 信息流广告 -->
+            <adsbygoogle
+              ad-slot="4980294904"
+              ad-format="fluid"
+              ad-layout-key="-ht-19-1m-3j+mu"
+            />
+          </div>
+          <div class="project-header">
+            <h1 itemprop="headline">
+              <a :href="'/project/' + p.projectId">
+                <span class="project-name">{{ p.name }}</span>
+                <span v-if="p.title" class="project-title"
+                  >&nbsp;-&nbsp;{{ p.title }}</span
+                >
+              </a>
+            </h1>
+          </div>
+          <div class="summary" itemprop="description">
+            {{ p.summary }}
+          </div>
+          <span class="meta">
+            <span
+              itemprop="author"
+              itemscope
+              itemtype="http://schema.org/Person"
+            >
+              <a :href="'/user/' + p.user.id" itemprop="name">{{
+                p.user.nickname
+              }}</a>
+            </span>
+            <span>
+              <time
+                :datetime="p.createTime | formatDate('yyyy-MM-ddTHH:mm:ss')"
+                itemprop="datePublished"
+                >{{ p.createTime | prettyDate }}</time
+              >
+            </span>
           </span>
-          <span>{{ p.createTime | prettyDate }}</span>
-        </div>
+        </article>
       </li>
     </ul>
   </div>
@@ -27,11 +55,11 @@ export default {
   props: {
     projects: {
       type: Array,
-      default: function () {
+      default() {
         return []
-      }
-    }
-  }
+      },
+    },
+  },
 }
 </script>
 
@@ -48,7 +76,7 @@ export default {
       .project-name {
         font-size: 18px;
         font-weight: 700;
-        color: rgba(0,0,0,.75);
+        color: rgba(0, 0, 0, 0.75);
         margin-top: 5px;
         margin-bottom: 5px;
       }
@@ -56,13 +84,13 @@ export default {
       .project-title {
         font-size: 16px;
         font-weight: 400;
-        color: rgba(0,0,0,.6);
+        color: rgba(0, 0, 0, 0.6);
       }
     }
 
     .summary {
       font-size: 14px;
-      color: rgba(0,0,0,.7);
+      color: rgba(0, 0, 0, 0.7);
       margin-top: 10px;
       margin-bottom: 10px;
     }

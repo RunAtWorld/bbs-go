@@ -1,93 +1,76 @@
 <template>
   <section class="main">
-    <div class="container">
-      <div class="left-main-container">
-        <div class="m-left">
-          <div v-if="project" class="project">
-            <div class="project-header">
+    <div class="container main-container is-white left-main">
+      <div class="left-container">
+        <div v-if="project" class="project">
+          <div class="project-header">
+            <h1>
               <span class="project-name">{{ project.name }}</span>
-              <span v-if="project.title" class="project-title">&nbsp;-&nbsp;{{ project.title }}</span>
-            </div>
-            <div class="meta">
+              <span v-if="project.title" class="project-title"
+                >&nbsp;-&nbsp;{{ project.title }}</span
+              >
+            </h1>
+            <div class="project-meta">
               <span>
-                <a :href="'/user/' + project.user.id">{{ project.user.nickname }}</a>
+                <a :href="'/user/' + project.user.id">{{
+                  project.user.nickname
+                }}</a>
               </span>
               <span>{{ project.createTime | prettyDate }}</span>
             </div>
-            <div class="content">
-              <ins
-                class="adsbygoogle"
-                style="display:block"
-                data-ad-format="fluid"
-                data-ad-layout-key="-ig-s+1x-t-q"
-                data-ad-client="ca-pub-5683711753850351"
-                data-ad-slot="4728140043"
-              />
-              <script>
-                (adsbygoogle = window.adsbygoogle || []).push({});
-              </script>
-              <p v-highlight v-html="project.content" />
-            </div>
-            <div class="footer">
-              <a
-                v-if="projectUrl"
-                class="homepage"
-                :href="projectUrl"
-                target="_blank"
-              >项目主页</a>
-              <a
-                v-if="docUrl"
-                class="homepage"
-                :href="docUrl"
-                target="_blank"
-              >文档地址</a>
-              <a
-                v-if="downloadUrl"
-                class="homepage"
-                :href="downloadUrl"
-                target="_blank"
-              >下载地址</a>
-            </div>
           </div>
 
-          <!-- 评论 -->
-          <comment entity-type="project" :entity-id="project.projectId" :show-ad="true" />
+          <div class="ad">
+            <!-- 展示广告 -->
+            <adsbygoogle ad-slot="1742173616" />
+          </div>
+
+          <div
+            v-lazy-container="{ selector: 'img' }"
+            class="content"
+            v-html="project.content"
+          ></div>
+
+          <div class="footer">
+            <a
+              v-if="projectUrl"
+              :href="projectUrl"
+              class="homepage"
+              target="_blank"
+              >项目主页</a
+            >
+            <a v-if="docUrl" :href="docUrl" class="homepage" target="_blank"
+              >文档地址</a
+            >
+            <a
+              v-if="downloadUrl"
+              :href="downloadUrl"
+              class="homepage"
+              target="_blank"
+              >下载地址</a
+            >
+          </div>
         </div>
-        <div class="m-right">
-          <div style="max-height:60px;">
-            <!-- 展示广告190x90 -->
-            <ins
-              class="adsbygoogle"
-              style="display:inline-block;width:190px;height:90px"
-              data-ad-client="ca-pub-5683711753850351"
-              data-ad-slot="9345305153"
-            />
-            <script>
-              (adsbygoogle = window.adsbygoogle || []).push({});
-            </script>
 
-            <!-- 展示广告190x190 -->
-            <ins
-              class="adsbygoogle"
-              style="display:inline-block;width:190px;height:190px"
-              data-ad-client="ca-pub-5683711753850351"
-              data-ad-slot="5685455263"
-            />
-            <script>
-              (adsbygoogle = window.adsbygoogle || []).push({});
-            </script>
+        <!-- 评论 -->
+        <comment
+          :entity-id="project.projectId"
+          :comments-page="commentsPage"
+          :show-ad="true"
+          entity-type="project"
+        />
+      </div>
+      <div class="right-container">
+        <site-notice />
 
-            <!-- 展示广告190x480 -->
-            <ins
-              class="adsbygoogle"
-              style="display:inline-block;width:190px;height:480px"
-              data-ad-client="ca-pub-5683711753850351"
-              data-ad-slot="3438372357"
-            />
-            <script>
-              (adsbygoogle = window.adsbygoogle || []).push({});
-            </script>
-          </div>
+        <div class="ad">
+          <!-- 展示广告 -->
+          <adsbygoogle ad-slot="1742173616" />
+        </div>
+
+        <div class="ad">
+          <!-- 展示广告 -->
+          <adsbygoogle ad-slot="1742173616" />
         </div>
       </div>
     </div>
@@ -96,29 +79,29 @@
 
 <script>
 import Comment from '~/components/Comment'
+import SiteNotice from '~/components/SiteNotice'
+
 export default {
   components: {
-    Comment
+    Comment,
+    SiteNotice,
   },
-  head() {
-    return {
-      title: this.$siteTitle(this.project.name),
-      meta: [
-        { hid: 'description', name: 'description', content: this.project.title }
-      ]
-    }
-  },
-  async asyncData({ $axios, params }) {
-    const [currentUser, project] = await Promise.all([
-      $axios.get('/api/user/current'),
-      $axios.get('/api/project/' + params.id)
+  async asyncData({ $axios, params, store }) {
+    const [project, commentsPage] = await Promise.all([
+      $axios.get('/api/project/' + params.id),
+      $axios.get('/api/comment/list', {
+        params: {
+          entityType: 'project',
+          entityId: params.id,
+        },
+      }),
     ])
     // 构建url，如果登录了直接跳转到原地址，如果没登陆那么跳转到登录
     function buildUrl(url) {
       if (!url || !project) {
         return ''
       }
-      if (currentUser) {
+      if (store.state.user.current) {
         // 如果用户登录了
         return '/redirect?url=' + encodeURI(url)
       } else {
@@ -127,14 +110,23 @@ export default {
       }
     }
     return {
-      curretnUser: currentUser,
-      project: project,
+      project,
+      commentsPage,
       projectUrl: buildUrl(project.url),
       docUrl: buildUrl(project.docUrl),
-      downloadUrl: buildUrl(project.downloadUrl)
+      downloadUrl: buildUrl(project.downloadUrl),
     }
   },
-  methods: {}
+  head() {
+    let siteTitle = this.project.name
+    if (this.project.title) {
+      siteTitle += ' - ' + this.project.title
+    }
+    return {
+      title: this.$siteTitle(siteTitle),
+      meta: [{ hid: 'description', name: 'description', content: siteTitle }],
+    }
+  },
 }
 </script>
 
@@ -143,37 +135,38 @@ export default {
   margin-bottom: 10px;
 
   .project-header {
+    padding: 10px 0;
+    border-bottom: 1px solid #eee;
     .project-name {
       font-size: 18px;
       font-weight: 700;
       color: rgba(0, 0, 0, 0.75);
-      margin-top: 5px;
-      margin-bottom: 5px;
     }
 
     .project-title {
       font-size: 16px;
-      font-weight: 400;
+      font-weight: 500;
       color: rgba(0, 0, 0, 0.6);
     }
-  }
 
-  .meta {
-    margin-bottom: 15px;
-    border-bottom: 1px solid #f4f4f5;
-    span {
-      display: inline-block;
-      font-size: 14px;
-      color: #999;
-      padding-top: 6px;
-
-      a {
+    .project-meta {
+      span {
+        font-size: 14px;
         color: #999;
-        cursor: pointer;
+        padding-top: 6px;
 
-        &:hover {
-          color: #3273dc;
-          font-weight: 500;
+        &:not(:first-child) {
+          margin-left: 10px;
+        }
+
+        a {
+          color: #999;
+          cursor: pointer;
+
+          &:hover {
+            color: #3273dc;
+            font-weight: 500;
+          }
         }
       }
     }

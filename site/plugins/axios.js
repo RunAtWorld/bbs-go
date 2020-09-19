@@ -2,7 +2,7 @@ import qs from 'qs'
 
 export default function ({ $axios, $toast, app }) {
   $axios.onRequest((config) => {
-    config.headers.common['X-Client'] = 'mlog-club-site'
+    config.headers.common['X-Client'] = 'bbs-go-site'
     config.headers.post['Content-Type'] = 'application/x-www-form-urlencoded'
     const userToken = app.$cookies.get('userToken')
     if (userToken) {
@@ -10,12 +10,13 @@ export default function ({ $axios, $toast, app }) {
     }
     config.transformRequest = [
       function (data) {
-        if (process.client && data instanceof FormData) { // 如果是FormData就不转换
+        if (process.client && data instanceof FormData) {
+          // 如果是FormData就不转换
           return data
         }
         data = qs.stringify(data)
         return data
-      }
+      },
     ]
   })
 

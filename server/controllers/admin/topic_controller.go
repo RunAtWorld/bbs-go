@@ -1,19 +1,22 @@
 package admin
 
 import (
-	"github.com/kataras/iris"
-	"github.com/mlogclub/bbs-go/controllers/render"
-	"github.com/mlogclub/bbs-go/model"
-	"github.com/mlogclub/bbs-go/services"
-	"github.com/mlogclub/simple"
 	"strconv"
+
+	"github.com/kataras/iris/v12"
+	"github.com/mlogclub/simple"
+	"github.com/mlogclub/simple/markdown"
+
+	"bbs-go/controllers/render"
+	"bbs-go/model"
+	"bbs-go/services"
 )
 
 type TopicController struct {
 	Ctx iris.Context
 }
 
-func (this *TopicController) GetBy(id int64) *simple.JsonResult {
+func (c *TopicController) GetBy(id int64) *simple.JsonResult {
 	t := services.TopicService.Get(id)
 	if t == nil {
 		return simple.JsonErrorMsg("Not found, id=" + strconv.FormatInt(id, 10))
@@ -21,9 +24,9 @@ func (this *TopicController) GetBy(id int64) *simple.JsonResult {
 	return simple.JsonData(t)
 }
 
-func (this *TopicController) AnyList() *simple.JsonResult {
-	list, paging := services.TopicService.Query(simple.NewParamQueries(this.Ctx).
-		EqAuto("id").EqAuto("user_id").EqAuto("status").LikeAuto("title").PageAuto().Desc("id"))
+func (c *TopicController) AnyList() *simple.JsonResult {
+	list, paging := services.TopicService.FindPageByParams(simple.NewQueryParams(c.Ctx).
+		EqByReq("id").EqByReq("user_id").EqByReq("status").EqByReq("recommend").LikeByReq("title").PageByReq().Desc("id"))
 
 	var results []map[string]interface{}
 	for _, topic := range list {
@@ -32,9 +35,13 @@ func (this *TopicController) AnyList() *simple.JsonResult {
 		// 用户
 		builder = builder.Put("user", render.BuildUserDefaultIfNull(topic.UserId))
 
+		// 节点
+		node := services.TopicNodeService.Get(topic.NodeId)
+		builder.Put("node", node)
+
 		// 简介
-		mr := simple.NewMd().Run(topic.Content)
-		builder.Put("summary", mr.SummaryText)
+		_, summary := markdown.New().Run(topic.Content)
+		builder.Put("summary", summary)
 
 		// 标签
 		tags := services.TopicService.GetTopicTags(topic.Id)
@@ -44,12 +51,37 @@ func (this *TopicController) AnyList() *simple.JsonResult {
 	}
 
 	return simple.JsonData(&simple.PageResult{Results: results, Page: paging})
-
 }
 
-func (this *TopicController) PostCreate() *simple.JsonResult {
+// 推荐
+func (c *TopicController) PostRecommend() *simple.JsonResult {
+	id, err := simple.FormValueInt64(c.Ctx, "id")
+	if err != nil {
+		return simple.JsonErrorMsg(err.Error())
+	}
+	err = services.TopicService.SetRecommend(id, true)
+	if err != nil {
+		return simple.JsonErrorMsg(err.Error())
+	}
+	return simple.JsonSuccess()
+}
+
+// 取消推荐
+func (c *TopicController) DeleteRecommend() *simple.JsonResult {
+	id, err := simple.FormValueInt64(c.Ctx, "id")
+	if err != nil {
+		return simple.JsonErrorMsg(err.Error())
+	}
+	err = services.TopicService.SetRecommend(id, false)
+	if err != nil {
+		return simple.JsonErrorMsg(err.Error())
+	}
+	return simple.JsonSuccess()
+}
+
+func (c *TopicController) PostCreate() *simple.JsonResult {
 	t := &model.Topic{}
-	err := this.Ctx.ReadForm(t)
+	err := simple.ReadForm(c.Ctx, t)
 	if err != nil {
 		return simple.JsonErrorMsg(err.Error())
 	}
@@ -61,8 +93,8 @@ func (this *TopicController) PostCreate() *simple.JsonResult {
 	return simple.JsonData(t)
 }
 
-func (this *TopicController) PostUpdate() *simple.JsonResult {
-	id, err := simple.FormValueInt64(this.Ctx, "id")
+func (c *TopicController) PostUpdate() *simple.JsonResult {
+	id, err := simple.FormValueInt64(c.Ctx, "id")
 	if err != nil {
 		return simple.JsonErrorMsg(err.Error())
 	}
@@ -71,7 +103,7 @@ func (this *TopicController) PostUpdate() *simple.JsonResult {
 		return simple.JsonErrorMsg("entity not found")
 	}
 
-	err = this.Ctx.ReadForm(t)
+	err = simple.ReadForm(c.Ctx, t)
 	if err != nil {
 		return simple.JsonErrorMsg(err.Error())
 	}
@@ -83,13 +115,25 @@ func (this *TopicController) PostUpdate() *simple.JsonResult {
 	return simple.JsonData(t)
 }
 
-func (this *TopicController) PostDelete() *simple.JsonResult {
-	id, err := simple.FormValueInt64(this.Ctx, "id")
+func (c *TopicController) PostDelete() *simple.JsonResult {
+	id, err := simple.FormValueInt64(c.Ctx, "id")
 	if err != nil {
 		return simple.JsonErrorMsg(err.Error())
 	}
 
 	err = services.TopicService.Delete(id)
+	if err != nil {
+		return simple.JsonErrorMsg(err.Error())
+	}
+	return simple.JsonSuccess()
+}
+
+func (c *TopicController) PostUndelete() *simple.JsonResult {
+	id, err := simple.FormValueInt64(c.Ctx, "id")
+	if err != nil {
+		return simple.JsonErrorMsg(err.Error())
+	}
+	err = services.TopicService.Undelete(id)
 	if err != nil {
 		return simple.JsonErrorMsg(err.Error())
 	}

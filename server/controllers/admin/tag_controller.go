@@ -1,18 +1,23 @@
 package admin
 
 import (
-	"github.com/kataras/iris"
-	"github.com/mlogclub/bbs-go/model"
-	"github.com/mlogclub/bbs-go/services"
-	"github.com/mlogclub/simple"
+	"bbs-go/model/constants"
 	"strconv"
+	"strings"
+
+	"github.com/kataras/iris/v12"
+	"github.com/mlogclub/simple"
+
+	"bbs-go/controllers/render"
+	"bbs-go/model"
+	"bbs-go/services"
 )
 
 type TagController struct {
 	Ctx iris.Context
 }
 
-func (this *TagController) GetBy(id int64) *simple.JsonResult {
+func (c *TagController) GetBy(id int64) *simple.JsonResult {
 	t := services.TagService.Get(id)
 	if t == nil {
 		return simple.JsonErrorMsg("Not found, id=" + strconv.FormatInt(id, 10))
@@ -20,17 +25,18 @@ func (this *TagController) GetBy(id int64) *simple.JsonResult {
 	return simple.JsonData(t)
 }
 
-func (this *TagController) AnyList() *simple.JsonResult {
-	list, paging := services.TagService.Query(simple.NewParamQueries(this.Ctx).
-		LikeAuto("name").
-		EqAuto("status").
-		PageAuto().Desc("id"))
+func (c *TagController) AnyList() *simple.JsonResult {
+	list, paging := services.TagService.FindPageByParams(simple.NewQueryParams(c.Ctx).
+		LikeByReq("id").
+		LikeByReq("name").
+		EqByReq("status").
+		PageByReq().Desc("id"))
 	return simple.JsonData(&simple.PageResult{Results: list, Page: paging})
 }
 
-func (this *TagController) PostCreate() *simple.JsonResult {
+func (c *TagController) PostCreate() *simple.JsonResult {
 	t := &model.Tag{}
-	err := this.Ctx.ReadForm(t)
+	err := simple.ReadForm(c.Ctx, t)
 	if err != nil {
 		return simple.JsonErrorMsg(err.Error())
 	}
@@ -42,7 +48,7 @@ func (this *TagController) PostCreate() *simple.JsonResult {
 		return simple.JsonErrorMsg("标签「" + t.Name + "」已存在")
 	}
 
-	t.Status = model.TagStatusOk
+	t.Status = constants.StatusOk
 	t.CreateTime = simple.NowTimestamp()
 	t.UpdateTime = simple.NowTimestamp()
 
@@ -53,8 +59,8 @@ func (this *TagController) PostCreate() *simple.JsonResult {
 	return simple.JsonData(t)
 }
 
-func (this *TagController) PostUpdate() *simple.JsonResult {
-	id, err := simple.FormValueInt64(this.Ctx, "id")
+func (c *TagController) PostUpdate() *simple.JsonResult {
+	id, err := simple.FormValueInt64(c.Ctx, "id")
 	if err != nil {
 		return simple.JsonErrorMsg(err.Error())
 	}
@@ -63,7 +69,7 @@ func (this *TagController) PostUpdate() *simple.JsonResult {
 		return simple.JsonErrorMsg("entity not found")
 	}
 
-	err = this.Ctx.ReadForm(t)
+	err = simple.ReadForm(c.Ctx, t)
 	if err != nil {
 		return simple.JsonErrorMsg(err.Error())
 	}
@@ -83,52 +89,27 @@ func (this *TagController) PostUpdate() *simple.JsonResult {
 	return simple.JsonData(t)
 }
 
-func (this *TagController) AnyListAll() *simple.JsonResult {
-	categoryId, err := strconv.ParseInt(this.Ctx.FormValue("categoryId"), 10, 64)
-	if err != nil {
-		return simple.JsonErrorMsg(err.Error())
+// 自动完成
+func (c *TagController) GetAutocomplete() *simple.JsonResult {
+	keyword := strings.TrimSpace(c.Ctx.URLParam("keyword"))
+	var tags []model.Tag
+	if len(keyword) > 0 {
+		tags = services.TagService.Find(simple.NewSqlCnd().Starting("name", keyword).Desc("id"))
+	} else {
+		tags = services.TagService.Find(simple.NewSqlCnd().Desc("id").Limit(10))
 	}
-	if categoryId < 0 {
-		return simple.JsonErrorMsg("请指定categoryId")
-	}
-	list, err := services.TagService.ListAll(categoryId)
-	if err != nil {
-		return simple.JsonData([]interface{}{})
-	}
-	return simple.JsonData(list)
+	return simple.JsonData(render.BuildTags(tags))
 }
 
-// 标签数据级联选择器
-func (this *TagController) GetCascader() *simple.JsonResult {
-	categories, err := services.CategoryService.GetCategories()
-	if err != nil {
-		return simple.JsonErrorMsg("数据加载失败")
-	}
-
-	var results []map[string]interface{}
-
-	for _, cat := range categories {
-		tags, err := services.TagService.ListAll(cat.Id)
-		if err != nil || len(tags) == 0 {
-			continue
+// 根据标签编号批量获取
+func (c *TagController) GetTags() *simple.JsonResult {
+	tagIds := simple.FormValueInt64Array(c.Ctx, "tagIds")
+	var tags *[]model.TagResponse
+	if len(tagIds) > 0 {
+		tagArr := services.TagService.Find(simple.NewSqlCnd().In("id", tagIds))
+		if len(tagArr) > 0 {
+			tags = render.BuildTags(tagArr)
 		}
-
-		var tagOptions []map[string]interface{}
-		for _, tag := range tags {
-			tagOption := make(map[string]interface{})
-			tagOption["value"] = tag.Id
-			tagOption["label"] = tag.Name
-			tagOptions = append(tagOptions, tagOption)
-		}
-
-		option := make(map[string]interface{})
-		option["value"] = cat.Id
-		option["label"] = cat.Name
-		option["children"] = tagOptions
-
-		results = append(results, option)
 	}
-
-	return simple.JsonData(results)
-
+	return simple.JsonData(tags)
 }
